@@ -146,6 +146,11 @@ let g:mkdp_auto_close = 1
 " default: 0
 let g:mkdp_refresh_slow = 0
 
+" debounce full content refresh after text changes, in milliseconds.
+" Set to 0 to disable TextChanged-driven live refresh
+" default: 160
+let g:mkdp_refresh_debounce = 160
+
 " set to 1, the MarkdownPreview command can be used for all files,
 " by default it can be use in Markdown files only
 " default: 0

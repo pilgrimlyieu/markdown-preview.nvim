@@ -986,6 +986,36 @@ function testCursorSyncUsesLightweightEvent () {
   assert.match(page, /const refreshScroll = \(\) => this\.onSyncScroll\(this\.latestScroll \|\| scrollPayload\)/)
 }
 
+function testDebouncedContentRefresh () {
+  const plugin = read('plugin', 'mkdp.vim')
+  assert.match(plugin, /g:mkdp_refresh_debounce/)
+  assert.match(plugin, /let g:mkdp_refresh_debounce = 160/)
+
+  const autocmd = read('autoload', 'mkdp', 'autocmd.vim')
+  assert.match(autocmd, /TextChanged,TextChangedI <buffer> call mkdp#rpc#preview_refresh_debounced\(\)/)
+  assert.doesNotMatch(autocmd, /TextChanged[^\n]*preview_refresh\(\)/)
+
+  const rpc = read('autoload', 'mkdp', 'rpc.vim')
+  assert.match(rpc, /let s:refresh_timers = {}/)
+  assert.match(rpc, /function! s:refresh_debounce\(\)/)
+  assert.match(rpc, /get\(g:, 'mkdp_refresh_debounce', 160\)/)
+  assert.match(rpc, /function! s:clear_refresh_timer\(bufnr\)/)
+  assert.match(rpc, /function! s:clear_all_refresh_timers\(\)/)
+  assert.match(rpc, /for l:key in keys\(copy\(s:refresh_timers\)\)/)
+  assert.match(rpc, /timer_stop\(s:refresh_timers\[l:key\]\)/)
+  assert.match(rpc, /remove\(s:refresh_timers, l:key\)/)
+  assert.match(rpc, /call s:clear_all_refresh_timers\(\)/)
+  assert.match(rpc, /function! s:send_refresh\(bufnr, \.\.\.\)/)
+  assert.match(rpc, /s:notify_server\(a:bufnr, 'refresh_content', { 'bufnr': a:bufnr }\)/)
+  assert.match(rpc, /function! mkdp#rpc#preview_refresh_debounced\(\)/)
+  assert.match(rpc, /timer_start\(l:delay, function\('s:send_refresh', \[l:bufnr\]\)\)/)
+  assert.match(rpc, /call s:clear_refresh_timer\(a:server\.bufnr\)/)
+  assert.match(rpc, /call s:clear_refresh_timer\(l:bufnr\)/)
+
+  const readme = read('README.md')
+  assert.match(readme, /let g:mkdp_refresh_debounce = 160/)
+}
+
 function testFreshRefreshSkipsFullContent () {
   const attach = read('src', 'attach', 'index.ts')
   assert.match(attach, /const getChangedtick = \(bufnr/)
@@ -1174,6 +1204,7 @@ async function main () {
   testMultiPortSupport()
   testNativePreviewTransport()
   testCursorSyncUsesLightweightEvent()
+  testDebouncedContentRefresh()
   testFreshRefreshSkipsFullContent()
   testSelectivePostRenderGates()
   testChartRendererIsLazyChunk()

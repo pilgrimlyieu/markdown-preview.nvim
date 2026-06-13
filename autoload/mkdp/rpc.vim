@@ -3,6 +3,7 @@ let s:mkdp_opts = {}
 let s:is_vim = !has('nvim')
 let s:shared_key = '__shared__'
 let s:servers = {}
+let s:refresh_timers = {}
 let s:sync_scroll_timers = {}
 
 function! s:empty_channel() abort
@@ -54,12 +55,33 @@ function! s:sync_scroll_throttle() abort
   return l:delay > 0 ? l:delay : 0
 endfunction
 
+function! s:refresh_debounce() abort
+  let l:value = get(g:, 'mkdp_refresh_debounce', 160)
+  let l:delay = type(l:value) == type(0) ? l:value : str2nr(l:value)
+  return l:delay > 0 ? l:delay : 0
+endfunction
+
+function! s:clear_refresh_timer(bufnr) abort
+  let l:key = string(a:bufnr)
+  if has_key(s:refresh_timers, l:key)
+    call timer_stop(s:refresh_timers[l:key])
+    call remove(s:refresh_timers, l:key)
+  endif
+endfunction
+
 function! s:clear_sync_scroll_timer(bufnr) abort
   let l:key = string(a:bufnr)
   if has_key(s:sync_scroll_timers, l:key)
     call timer_stop(s:sync_scroll_timers[l:key])
     call remove(s:sync_scroll_timers, l:key)
   endif
+endfunction
+
+function! s:clear_all_refresh_timers() abort
+  for l:key in keys(copy(s:refresh_timers))
+    call timer_stop(s:refresh_timers[l:key])
+    call remove(s:refresh_timers, l:key)
+  endfor
 endfunction
 
 function! s:clear_all_sync_scroll_timers() abort
@@ -89,6 +111,15 @@ function! s:send_sync_scroll(bufnr, ...) abort
     return
   endif
   call s:notify_server(a:bufnr, 'sync_scroll', s:sync_scroll_data(a:bufnr))
+endfunction
+
+function! s:send_refresh(bufnr, ...) abort
+  call s:clear_refresh_timer(a:bufnr)
+  call s:clear_sync_scroll_timer(a:bufnr)
+  if bufnr('%') !=# a:bufnr
+    return
+  endif
+  call s:notify_server(a:bufnr, 'refresh_content', { 'bufnr': a:bufnr })
 endfunction
 
 function! s:on_stdout(chan_id, msgs, ...) abort
@@ -179,6 +210,7 @@ endfunction
 
 function! s:stop_server(server) abort
   let l:channel = a:server.channel
+  call s:clear_refresh_timer(a:server.bufnr)
   call s:clear_sync_scroll_timer(a:server.bufnr)
   if s:is_vim
     if s:is_channel_active(l:channel)
@@ -211,6 +243,7 @@ function! mkdp#rpc#stop_server(...) abort
     return
   endif
 
+  call s:clear_all_refresh_timers()
   call s:clear_all_sync_scroll_timers()
   for l:server in values(copy(s:servers))
     call s:stop_server(l:server)
@@ -237,8 +270,19 @@ endfunction
 
 function! mkdp#rpc#preview_refresh() abort
   let l:bufnr = bufnr('%')
-  call s:clear_sync_scroll_timer(l:bufnr)
-  call s:notify_server(l:bufnr, 'refresh_content', { 'bufnr': l:bufnr })
+  call s:send_refresh(l:bufnr)
+endfunction
+
+function! mkdp#rpc#preview_refresh_debounced() abort
+  let l:bufnr = bufnr('%')
+  let l:delay = s:refresh_debounce()
+  if l:delay <= 0
+    return
+  endif
+
+  let l:key = string(l:bufnr)
+  call s:clear_refresh_timer(l:bufnr)
+  let s:refresh_timers[l:key] = timer_start(l:delay, function('s:send_refresh', [l:bufnr]))
 endfunction
 
 function! mkdp#rpc#preview_sync_scroll() abort
@@ -257,6 +301,7 @@ endfunction
 
 function! mkdp#rpc#preview_close() abort
   let l:bufnr = bufnr('%')
+  call s:clear_refresh_timer(l:bufnr)
   call s:clear_sync_scroll_timer(l:bufnr)
   call s:notify_server(l:bufnr, 'close_page', { 'bufnr': l:bufnr })
   if get(g:, 'mkdp_multi_port', 0)

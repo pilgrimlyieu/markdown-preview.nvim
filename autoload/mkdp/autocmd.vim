@@ -8,6 +8,9 @@ function! mkdp#autocmd#init() abort
     else
       autocmd CursorHold,CursorHoldI,BufWrite,InsertLeave <buffer> call mkdp#rpc#preview_refresh()
     endif
+    if g:mkdp_refresh_debounce > 0
+      autocmd TextChanged,TextChangedI <buffer> call mkdp#rpc#preview_refresh_debounced()
+    endif
     if g:mkdp_sync_scroll_on_cursor
       autocmd CursorMoved,CursorMovedI <buffer> call mkdp#rpc#preview_sync_scroll()
     endif

@@ -21,6 +21,12 @@ if !exists('g:mkdp_refresh_slow')
   let g:mkdp_refresh_slow = 0
 endif
 
+" debounce full content refresh after text changes, in milliseconds.
+" set to 0 to disable TextChanged-driven live refresh
+if !exists('g:mkdp_refresh_debounce')
+  let g:mkdp_refresh_debounce = 160
+endif
+
 " set to 1, cursor movement only syncs preview scroll position instead of
 " refreshing the full markdown document
 if !exists('g:mkdp_sync_scroll_on_cursor')
