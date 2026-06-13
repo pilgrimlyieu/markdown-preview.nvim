@@ -4,6 +4,51 @@ const logger = require('./lib/util/logger')('app/routes')
 
 const routes = []
 
+const CACHE_POLICIES = {
+  immutable: 'public, max-age=31536000, immutable',
+  revalidate: 'public, max-age=0, must-revalidate',
+  noStore: 'no-store'
+}
+
+const mtimeSeconds = (stat) => Math.floor(stat.mtimeMs / 1000) * 1000
+
+const weakEtag = (stat) => `W/"${stat.size}-${Math.trunc(stat.mtimeMs)}"`
+
+const isFresh = (req, stat, etag) => {
+  const ifNoneMatch = req.headers['if-none-match']
+  if (ifNoneMatch && (ifNoneMatch === '*' || ifNoneMatch.split(/\s*,\s*/).includes(etag))) {
+    return true
+  }
+
+  const ifModifiedSince = req.headers['if-modified-since']
+  if (!ifNoneMatch && ifModifiedSince) {
+    const modifiedSince = Date.parse(ifModifiedSince)
+    return Number.isFinite(modifiedSince) && mtimeSeconds(stat) <= modifiedSince
+  }
+
+  return false
+}
+
+const sendFile = (req, res, fpath, cacheControl = CACHE_POLICIES.revalidate) => {
+  res.setHeader('Cache-Control', cacheControl)
+  if (cacheControl === CACHE_POLICIES.noStore) {
+    return fs.createReadStream(fpath).pipe(res)
+  }
+
+  const stat = fs.statSync(fpath)
+  const etag = weakEtag(stat)
+
+  res.setHeader('ETag', etag)
+  res.setHeader('Last-Modified', stat.mtime.toUTCString())
+
+  if (isFresh(req, stat, etag)) {
+    res.statusCode = 304
+    return res.end()
+  }
+
+  return fs.createReadStream(fpath).pipe(res)
+}
+
 const use = function (route) {
   routes.unshift((req, res, next) => () => route(req, res, next))
 }
@@ -11,7 +56,7 @@ const use = function (route) {
 // /page/:number
 use((req, res, next) => {
   if (/\/page\/\d+/.test(req.asPath)) {
-    return fs.createReadStream('./out/index.html').pipe(res)
+    return sendFile(req, res, './out/index.html', CACHE_POLICIES.noStore)
   }
   next()
 })
@@ -19,7 +64,10 @@ use((req, res, next) => {
 // /_next/path
 use((req, res, next) => {
   if (/\/_next/.test(req.asPath)) {
-    return fs.createReadStream(path.join('./out', req.asPath)).pipe(res)
+    const fpath = path.join('./out', req.asPath)
+    if (fs.existsSync(fpath)) {
+      return sendFile(req, res, fpath, CACHE_POLICIES.immutable)
+    }
   }
   next()
 })
@@ -30,11 +78,11 @@ use((req, res, next) => {
   try {
     if (req.mkcss && req.asPath === '/_static/markdown.css') {
       if (fs.existsSync(req.mkcss)) {
-        return fs.createReadStream(req.mkcss).pipe(res)
+        return sendFile(req, res, req.mkcss)
       }
     } else if (req.hicss && req.asPath === '/_static/highlight.css') {
       if (fs.existsSync(req.hicss)) {
-        return fs.createReadStream(req.hicss).pipe(res)
+        return sendFile(req, res, req.hicss)
       }
     }
   } catch (e) {
@@ -48,7 +96,7 @@ use((req, res, next) => {
   if (/\/_static/.test(req.asPath)) {
     const fpath = path.join('./', req.asPath)
     if (fs.existsSync(fpath)) {
-      return fs.createReadStream(fpath).pipe(res)
+      return sendFile(req, res, fpath)
     } else {
       logger.error('No such file:', req.asPath, req.mkcss, req.hicss)
     }
@@ -112,7 +160,7 @@ use(async (req, res, next) => {
         if (imgPath.endsWith('svg')) {
           res.setHeader('content-type', 'image/svg+xml')
         }
-        return fs.createReadStream(imgPath).pipe(res)
+        return sendFile(req, res, imgPath)
       }
       logger.error('image not exists: ', imgPath)
     }
@@ -123,7 +171,7 @@ use(async (req, res, next) => {
 // 404
 use((req, res) => {
   res.statusCode = 404
-  return fs.createReadStream(path.join('./out', '404.html')).pipe(res)
+  return sendFile(req, res, path.join('./out', '404.html'), CACHE_POLICIES.noStore)
 })
 
 module.exports = function (req, res, next) {

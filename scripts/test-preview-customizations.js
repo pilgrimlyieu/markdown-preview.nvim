@@ -1181,6 +1181,26 @@ function testBuildCacheHygiene () {
   })
 }
 
+function testStaticAssetCacheHeaders () {
+  const routes = read('app', 'routes.js')
+
+  assert.match(routes, /const CACHE_POLICIES = \{/)
+  assert.match(routes, /immutable: 'public, max-age=31536000, immutable'/)
+  assert.match(routes, /revalidate: 'public, max-age=0, must-revalidate'/)
+  assert.match(routes, /noStore: 'no-store'/)
+  assert.match(routes, /res\.setHeader\('Cache-Control', cacheControl\)/)
+  assert.match(routes, /if \(cacheControl === CACHE_POLICIES\.noStore\) \{/)
+  assert.match(routes, /res\.setHeader\('ETag', etag\)/)
+  assert.match(routes, /res\.setHeader\('Last-Modified', stat\.mtime\.toUTCString\(\)\)/)
+  assert.match(routes, /res\.statusCode = 304/)
+  assert.match(routes, /return res\.end\(\)/)
+  assert.match(routes, /ifNoneMatch === '\*'/)
+  assert.match(routes, /mtimeSeconds\(stat\) <= modifiedSince/)
+  assert.match(routes, /sendFile\(req, res, '\.\/out\/index\.html', CACHE_POLICIES\.noStore\)/)
+  assert.match(routes, /sendFile\(req, res, fpath, CACHE_POLICIES\.immutable\)/)
+  assert.match(routes, /sendFile\(req, res, fpath\)/)
+}
+
 async function main () {
   testAdmonitionRendering()
   testChartFenceRendering()
@@ -1212,6 +1232,7 @@ async function main () {
   testBunCompatibleModuleLoader()
   testMermaidStaticRuntime()
   testBuildCacheHygiene()
+  testStaticAssetCacheHeaders()
 
   console.log('preview customization checks passed')
 }
