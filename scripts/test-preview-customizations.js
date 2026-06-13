@@ -211,12 +211,22 @@ function testMultiPortSupport () {
 function testCursorSyncUsesLightweightEvent () {
   const plugin = read('plugin', 'mkdp.vim')
   assert.match(plugin, /g:mkdp_sync_scroll_on_cursor/)
+  assert.match(plugin, /g:mkdp_sync_scroll_throttle/)
 
   const autocmd = read('autoload', 'mkdp', 'autocmd.vim')
   assert.match(autocmd, /CursorMoved,CursorMovedI <buffer> call mkdp#rpc#preview_sync_scroll\(\)/)
   assert.doesNotMatch(autocmd, /CursorMoved[^\n]*preview_refresh/)
 
   const rpc = read('autoload', 'mkdp', 'rpc.vim')
+  assert.match(rpc, /let s:sync_scroll_timers = {}/)
+  assert.match(rpc, /function! s:sync_scroll_throttle\(\)/)
+  assert.match(rpc, /function! s:clear_sync_scroll_timer\(bufnr\)/)
+  assert.match(rpc, /function! s:clear_all_sync_scroll_timers\(\)/)
+  assert.match(rpc, /for l:key in keys\(copy\(s:sync_scroll_timers\)\)/)
+  assert.match(rpc, /timer_stop\(s:sync_scroll_timers\[l:key\]\)/)
+  assert.match(rpc, /remove\(s:sync_scroll_timers, l:key\)/)
+  assert.match(rpc, /call s:clear_all_sync_scroll_timers\(\)/)
+  assert.match(rpc, /timer_start\(l:delay, function\('s:send_sync_scroll', \[l:bufnr\]\)\)/)
   assert.match(rpc, /function! mkdp#rpc#preview_sync_scroll\(\)/)
   assert.match(rpc, /'sync_scroll'/)
 

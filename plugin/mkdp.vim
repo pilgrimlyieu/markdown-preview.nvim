@@ -27,6 +27,11 @@ if !exists('g:mkdp_sync_scroll_on_cursor')
   let g:mkdp_sync_scroll_on_cursor = 1
 endif
 
+" throttle cursor-driven scroll sync in milliseconds
+if !exists('g:mkdp_sync_scroll_throttle')
+  let g:mkdp_sync_scroll_throttle = 40
+endif
+
 " set to 1, the MarkdownPreview command can be use for all files,
 " by default it just can be use in markdown file
 if !exists('g:mkdp_command_for_global')

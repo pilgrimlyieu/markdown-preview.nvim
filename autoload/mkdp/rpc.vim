@@ -3,6 +3,7 @@ let s:mkdp_opts = {}
 let s:is_vim = !has('nvim')
 let s:shared_key = '__shared__'
 let s:servers = {}
+let s:sync_scroll_timers = {}
 
 function! s:empty_channel() abort
   return s:is_vim ? v:null : -1
@@ -45,6 +46,35 @@ function! s:mark_buffer_stopped(bufnr) abort
   if bufexists(a:bufnr)
     call setbufvar(a:bufnr, 'MarkdownPreviewToggleBool', 0)
   endif
+endfunction
+
+function! s:sync_scroll_throttle() abort
+  let l:value = get(g:, 'mkdp_sync_scroll_throttle', 40)
+  let l:delay = type(l:value) == type(0) ? l:value : str2nr(l:value)
+  return l:delay > 0 ? l:delay : 0
+endfunction
+
+function! s:clear_sync_scroll_timer(bufnr) abort
+  let l:key = string(a:bufnr)
+  if has_key(s:sync_scroll_timers, l:key)
+    call timer_stop(s:sync_scroll_timers[l:key])
+    call remove(s:sync_scroll_timers, l:key)
+  endif
+endfunction
+
+function! s:clear_all_sync_scroll_timers() abort
+  for l:key in keys(copy(s:sync_scroll_timers))
+    call timer_stop(s:sync_scroll_timers[l:key])
+    call remove(s:sync_scroll_timers, l:key)
+  endfor
+endfunction
+
+function! s:send_sync_scroll(bufnr, ...) abort
+  call s:clear_sync_scroll_timer(a:bufnr)
+  if bufnr('%') !=# a:bufnr
+    return
+  endif
+  call s:notify_server(a:bufnr, 'sync_scroll', { 'bufnr': a:bufnr })
 endfunction
 
 function! s:on_stdout(chan_id, msgs, ...) abort
@@ -135,6 +165,7 @@ endfunction
 
 function! s:stop_server(server) abort
   let l:channel = a:server.channel
+  call s:clear_sync_scroll_timer(a:server.bufnr)
   if s:is_vim
     if s:is_channel_active(l:channel)
       try
@@ -166,6 +197,7 @@ function! mkdp#rpc#stop_server(...) abort
     return
   endif
 
+  call s:clear_all_sync_scroll_timers()
   for l:server in values(copy(s:servers))
     call s:stop_server(l:server)
   endfor
@@ -191,16 +223,27 @@ endfunction
 
 function! mkdp#rpc#preview_refresh() abort
   let l:bufnr = bufnr('%')
+  call s:clear_sync_scroll_timer(l:bufnr)
   call s:notify_server(l:bufnr, 'refresh_content', { 'bufnr': l:bufnr })
 endfunction
 
 function! mkdp#rpc#preview_sync_scroll() abort
   let l:bufnr = bufnr('%')
-  call s:notify_server(l:bufnr, 'sync_scroll', { 'bufnr': l:bufnr })
+  let l:delay = s:sync_scroll_throttle()
+  if l:delay <= 0
+    call s:send_sync_scroll(l:bufnr)
+    return
+  endif
+
+  let l:key = string(l:bufnr)
+  if !has_key(s:sync_scroll_timers, l:key)
+    let s:sync_scroll_timers[l:key] = timer_start(l:delay, function('s:send_sync_scroll', [l:bufnr]))
+  endif
 endfunction
 
 function! mkdp#rpc#preview_close() abort
   let l:bufnr = bufnr('%')
+  call s:clear_sync_scroll_timer(l:bufnr)
   call s:notify_server(l:bufnr, 'close_page', { 'bufnr': l:bufnr })
   if get(g:, 'mkdp_multi_port', 0)
     call mkdp#rpc#stop_server(l:bufnr)
