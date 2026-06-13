@@ -16,6 +16,11 @@ function getAttrTag (line) {
   return `[data-source-line="${line}"]`
 }
 
+function getDocumentOffsetTop (ele) {
+  const scrollTop = window.pageYOffset || document.documentElement.scrollTop || document.body.scrollTop || 0
+  return ele.getBoundingClientRect().top + scrollTop
+}
+
 function getPreLineOffsetTop (line) {
   let currentLine = line - 1
   let ele = null
@@ -27,7 +32,7 @@ function getPreLineOffsetTop (line) {
   }
   return [
     currentLine >= 0 ? currentLine : 0,
-    ele ? ele.offsetTop : 0
+    ele ? getDocumentOffsetTop(ele) : 0
   ]
 }
 
@@ -42,7 +47,7 @@ function getNextLineOffsetTop (line, len) {
   }
   return [
     currentLine < len ? currentLine : len - 1,
-    ele ? ele.offsetTop : document.documentElement.scrollHeight
+    ele ? getDocumentOffsetTop(ele) : document.documentElement.scrollHeight
   ]
 }
 
@@ -58,11 +63,14 @@ function relativeScroll (line, ratio, len) {
   let offsetTop = 0
   const lineEle = document.querySelector(`[data-source-line="${line}"]`)
   if (lineEle) {
-    offsetTop = lineEle.offsetTop
+    offsetTop = getDocumentOffsetTop(lineEle)
   } else {
     const pre = getPreLineOffsetTop(line)
     const next = getNextLineOffsetTop(line, len)
-    offsetTop = pre[1] + ((next[1] - pre[1]) * (line - pre[0]) / (next[0] - pre[0]))
+    const distance = next[0] - pre[0]
+    offsetTop = distance > 0
+      ? pre[1] + ((next[1] - pre[1]) * (line - pre[0]) / distance)
+      : pre[1]
   }
   scroll(offsetTop - document.documentElement.clientHeight * ratio)
 }
