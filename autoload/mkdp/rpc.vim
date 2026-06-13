@@ -194,6 +194,11 @@ function! mkdp#rpc#preview_refresh() abort
   call s:notify_server(l:bufnr, 'refresh_content', { 'bufnr': l:bufnr })
 endfunction
 
+function! mkdp#rpc#preview_sync_scroll() abort
+  let l:bufnr = bufnr('%')
+  call s:notify_server(l:bufnr, 'sync_scroll', { 'bufnr': l:bufnr })
+endfunction
+
 function! mkdp#rpc#preview_close() abort
   let l:bufnr = bufnr('%')
   call s:notify_server(l:bufnr, 'close_page', { 'bufnr': l:bufnr })

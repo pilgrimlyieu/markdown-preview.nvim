@@ -207,6 +207,35 @@ function testMultiPortSupport () {
   assert.match(server, /mkdp#util#open_browser', \[startBufnr\]/)
 }
 
+function testCursorSyncUsesLightweightEvent () {
+  const plugin = read('plugin', 'mkdp.vim')
+  assert.match(plugin, /g:mkdp_sync_scroll_on_cursor/)
+
+  const autocmd = read('autoload', 'mkdp', 'autocmd.vim')
+  assert.match(autocmd, /CursorMoved,CursorMovedI <buffer> call mkdp#rpc#preview_sync_scroll\(\)/)
+  assert.doesNotMatch(autocmd, /CursorMoved[^\n]*preview_refresh/)
+
+  const rpc = read('autoload', 'mkdp', 'rpc.vim')
+  assert.match(rpc, /function! mkdp#rpc#preview_sync_scroll\(\)/)
+  assert.match(rpc, /'sync_scroll'/)
+
+  const attach = read('src', 'attach', 'index.ts')
+  assert.match(attach, /const getScrollData = async/)
+  assert.match(attach, /method === 'refresh_content' \|\| method === 'sync_scroll'/)
+  assert.match(attach, /app\.syncScroll/)
+  assert.match(attach, /nvim\.call\('line', \['\$'\]\)/)
+
+  const server = read('app', 'server.js')
+  assert.match(server, /function syncScroll/)
+  assert.match(server, /emitToClients\(bufnr, 'sync_scroll', data\)/)
+
+  const page = read('app', 'pages', 'index.jsx')
+  assert.match(page, /socket\.on\('sync_scroll', this\.onSyncScroll\.bind\(this\)\)/)
+  assert.match(page, /onSyncScroll\(\{/)
+  assert.match(page, /scrollToLine\[syncScrollType\] \|\| scrollToLine\.middle/)
+  assert.match(page, /const refreshScroll = \(\) => this\.onSyncScroll/)
+}
+
 function testBunCompatibleModuleLoader () {
   const loader = path.join(root, 'app', 'lib', 'app', 'load.js')
   assert.ok(fs.existsSync(loader), 'expected built app/lib/app/load.js')
@@ -271,6 +300,7 @@ testScrollRuntimeInterpolatesIndentedAdmonitionBody()
 testBuiltPreviewBundle()
 testRuntimeSelection()
 testMultiPortSupport()
+testCursorSyncUsesLightweightEvent()
 testBunCompatibleModuleLoader()
 testMermaidStaticRuntime()
 testBuildCacheHygiene()

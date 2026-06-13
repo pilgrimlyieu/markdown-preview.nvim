@@ -139,6 +139,8 @@ export default class PreviewPage extends React.Component {
 
     socket.on('refresh_content', this.onRefreshContent.bind(this))
 
+    socket.on('sync_scroll', this.onSyncScroll.bind(this))
+
     socket.on('close_page', this.onClose.bind(this))
 
     socket.on('change_bufnr', this.onChangeBufnr.bind(this))
@@ -167,6 +169,26 @@ export default class PreviewPage extends React.Component {
 
   onChangeBufnr(bufnr) {
     this.startSocket(bufnr)
+  }
+
+  onSyncScroll({
+    options = {},
+    isActive,
+    winline,
+    winheight,
+    cursor,
+    len
+  }) {
+    if (isActive && !options.disable_sync_scroll) {
+      const syncScrollType = options.sync_scroll_type || 'middle'
+      const syncScroll = scrollToLine[syncScrollType] || scrollToLine.middle
+      syncScroll({
+        cursor: cursor[1],
+        winline,
+        winheight,
+        len
+      })
+    }
   }
 
   onRefreshContent({
@@ -257,16 +279,14 @@ export default class PreviewPage extends React.Component {
     const refreshContent = this.preContent !== newContent
     this.preContent = newContent
 
-    const refreshScroll = () => {
-      if (isActive && !options.disable_sync_scroll) {
-        scrollToLine[options.sync_scroll_type || 'middle']({
-          cursor: cursor[1],
-          winline,
-          winheight,
-          len: content.length
-        })
-      }
-    }
+    const refreshScroll = () => this.onSyncScroll({
+      options,
+      isActive,
+      winline,
+      winheight,
+      cursor,
+      len: content.length
+    })
 
     const refreshRender = () => {
       this.setState({
@@ -311,18 +331,18 @@ export default class PreviewPage extends React.Component {
 
     if (!this.preContent) {
       refreshRender()
-    } else {
-      if (!refreshContent) {
-        refreshScroll()
-      } else {
-        if (this.timer) {
-          clearTimeout(this.timer)
-        }
-        this.timer = setTimeout(() => {
-          refreshRender()
-        }, 16);
-      }
+      return
     }
+    if (!refreshContent) {
+      refreshScroll()
+      return
+    }
+    if (this.timer) {
+      clearTimeout(this.timer)
+    }
+    this.timer = setTimeout(() => {
+      refreshRender()
+    }, 16);
   }
 
   render() {

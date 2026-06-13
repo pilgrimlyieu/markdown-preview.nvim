@@ -21,6 +21,12 @@ if !exists('g:mkdp_refresh_slow')
   let g:mkdp_refresh_slow = 0
 endif
 
+" set to 1, cursor movement only syncs preview scroll position instead of
+" refreshing the full markdown document
+if !exists('g:mkdp_sync_scroll_on_cursor')
+  let g:mkdp_sync_scroll_on_cursor = 1
+endif
+
 " set to 1, the MarkdownPreview command can be use for all files,
 " by default it just can be use in markdown file
 if !exists('g:mkdp_command_for_global')

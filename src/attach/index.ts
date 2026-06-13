@@ -2,24 +2,21 @@ import { attach, Attach, NeovimClient } from '@chemzqm/neovim'
 
 const logger = require('../util/logger')('attach') // tslint:disable-line
 
+interface IPageEvent {
+  bufnr: number | string
+  data: any
+}
+
+interface IBufferEvent {
+  bufnr: number | string
+}
+
 interface IApp {
-  refreshPage: ((
-    param: {
-      bufnr: number | string
-      data: any
-    }
-  ) => void)
-  closePage: ((
-    params: {
-      bufnr: number | string
-    }
-  ) => void)
+  refreshPage: ((param: IPageEvent) => void)
+  closePage: ((params: IBufferEvent) => void)
   closeAllPages: (() => void)
-  openBrowser: ((
-    params: {
-      bufnr: number | string
-    }
-  ) => void)
+  syncScroll: ((param: IPageEvent) => void)
+  openBrowser: ((params: IBufferEvent) => void)
 }
 
 interface IPlugin {
@@ -32,30 +29,55 @@ let app: IApp
 export default function(options: Attach): IPlugin {
   const nvim: NeovimClient = attach(options)
 
+  const findBuffer = async (bufnr: number | string) => {
+    const buffers = await nvim.buffers
+    return buffers.find(buffer => buffer.id === Number(bufnr))
+  }
+
+  const getScrollData = async (buffer: any) => {
+    const winline = await nvim.call('winline')
+    const currentWindow = await nvim.window
+    const winheight = await nvim.call('winheight', currentWindow.id)
+    const cursor = await nvim.call('getpos', '.')
+    const options = await nvim.getVar('mkdp_preview_options')
+    const currentBuffer = await nvim.buffer
+    return {
+      options,
+      isActive: currentBuffer.id === buffer.id,
+      winline,
+      winheight,
+      cursor
+    }
+  }
+
   nvim.on('notification', async (method: string, args: any[]) => {
     const opts = args[0] || args
     const bufnr = opts.bufnr
-    const buffers = await nvim.buffers
-    const buffer = buffers.find(b => b.id === bufnr)
-    if (method === 'refresh_content') {
-      const winline = await nvim.call('winline')
-      const currentWindow = await nvim.window
-      const winheight = await nvim.call('winheight', currentWindow.id)
-      const cursor = await nvim.call('getpos', '.')
-      const renderOpts = await nvim.getVar('mkdp_preview_options')
+    if (method === 'refresh_content' || method === 'sync_scroll') {
+      const buffer = await findBuffer(bufnr)
+      if (!buffer) {
+        return
+      }
+      const scrollData = await getScrollData(buffer)
+      if (method === 'sync_scroll') {
+        app.syncScroll({
+          bufnr,
+          data: {
+            ...scrollData,
+            len: await nvim.call('line', ['$'])
+          }
+        })
+        return
+      }
+
       const pageTitle = await nvim.getVar('mkdp_page_title')
       const theme = await nvim.getVar('mkdp_theme')
       const name = await buffer.name
       const content = await buffer.getLines()
-      const currentBuffer = await nvim.buffer
       app.refreshPage({
         bufnr,
         data: {
-          options: renderOpts,
-          isActive: currentBuffer.id === buffer.id,
-          winline,
-          winheight,
-          cursor,
+          ...scrollData,
           pageTitle,
           theme,
           name,

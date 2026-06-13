@@ -224,6 +224,10 @@ exports.run = function () {
       logger.info('refresh page: ', bufnr)
       emitToClients(bufnr, 'refresh_content', data)
     }
+    function syncScroll ({ bufnr, data }) {
+      logger.info('sync scroll: ', bufnr)
+      emitToClients(bufnr, 'sync_scroll', data)
+    }
     function closePage ({ bufnr }) {
       logger.info('close page: ', bufnr)
       closeClients(bufnr)
@@ -269,6 +273,7 @@ exports.run = function () {
       refreshPage,
       closePage,
       closeAllPages,
+      syncScroll,
       openBrowser
     })
 
