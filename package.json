@@ -9,6 +9,7 @@
   "private": true,
   "scripts": {
     "watch": "tsc -w -p ./",
+    "test": "bun scripts/test-preview-customizations.js",
     "build-app": "cd app && rm -rf ./.next && NODE_OPTIONS=--openssl-legacy-provider next build && next export",
     "build-lib": "tsc -p ./",
     "build-local": "tsc -p ./ && cd app && rm -rf ./.next && NODE_OPTIONS=--openssl-legacy-provider next build && next export",
