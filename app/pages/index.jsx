@@ -26,12 +26,15 @@ const MHCHEM_SCRIPT = '/_static/mhchem.min.js'
 const IDLE_RENDER_TIMEOUT = 500
 const lazyStyleLoads = {}
 const lazyScriptLoads = {}
+const ENHANCED_BLOCK_RE = /^[ \t]*(?:(?:```|~~~)[ \t]*(?:mermaid|chart|sequence-diagrams|flowchart|dot|graphviz|plantuml)\b|@startuml\b|(?:gantt|sequenceDiagram|erDiagram|graph (?:TB|BT|RL|LR|TD);?)[ \t]*$)/m
 
 const hasElement = (selector) => document.querySelector(selector) !== null
 
 const contentUsesMath = (source) => source.indexOf('$') !== -1
 
 const contentUsesMhchem = (source) => /\\(?:ce|pu)\s*\{/.test(source)
+
+const contentUsesEnhancedBlocks = (source) => ENHANCED_BLOCK_RE.test(source)
 
 const loadLazyStyle = (href) => {
   if (lazyStyleLoads[href]) {
@@ -173,6 +176,7 @@ export default class PreviewPage extends React.Component {
     this.preContent = ''
     this.renderTimer = undefined
     this.cancelIdleRender = null
+    this.cancelPostRender = null
     this.renderVersion = 0
     this.latestScroll = null
     this.rendererPromise = null
@@ -213,6 +217,10 @@ export default class PreviewPage extends React.Component {
       this.cancelIdleRender()
       this.cancelIdleRender = null
     }
+    if (this.cancelPostRender) {
+      this.cancelPostRender()
+      this.cancelPostRender = null
+    }
   }
 
   invalidatePendingRender() {
@@ -228,6 +236,16 @@ export default class PreviewPage extends React.Component {
         return
       }
       renderWork()
+    })
+  }
+
+  schedulePostRender(renderVersion, markdownRenderer, options) {
+    this.cancelPostRender = scheduleIdleWork(() => {
+      this.cancelPostRender = null
+      if (renderVersion !== this.renderVersion) {
+        return
+      }
+      renderEnhancedBlocks(markdownRenderer, options, this.state.theme)
     })
   }
 
@@ -369,6 +387,14 @@ export default class PreviewPage extends React.Component {
 
     const refreshScroll = () => this.onSyncScroll(this.latestScroll || scrollPayload)
 
+    if (!refreshContent) {
+      refreshScroll()
+      return
+    }
+
+    const renderVersion = this.invalidatePendingRender()
+    const refreshEnhancedBlocks = contentUsesEnhancedBlocks(newContent)
+
     const applyRender = (markdownRenderer, renderedContent) => {
       const latestScroll = this.latestScroll || scrollPayload
       this.setState({
@@ -383,20 +409,13 @@ export default class PreviewPage extends React.Component {
         contentEditable: options.content_editable,
         disableFilename: options.disable_filename
       }, () => {
-        if (refreshContent) {
-          scrollToLine.invalidate()
-          renderEnhancedBlocks(markdownRenderer, options, this.state.theme)
+        scrollToLine.invalidate()
+        if (refreshEnhancedBlocks) {
+          this.schedulePostRender(renderVersion, markdownRenderer, options)
         }
         refreshScroll()
       })
     }
-
-    if (!refreshContent) {
-      refreshScroll()
-      return
-    }
-
-    const renderVersion = this.invalidatePendingRender()
 
     const refreshRender = (deferRender) => {
       Promise.all([

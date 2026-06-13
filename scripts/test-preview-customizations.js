@@ -889,6 +889,86 @@ async function testFollowupRenderWaitsForIdleAndCancelsStaleWork () {
   assert.deepStrictEqual(renderCalls, ['# Initial', '# Latest'])
 }
 
+async function testEnhancedPostRenderWaitsForIdleAndCancelsStaleWork () {
+  const {
+    PreviewPage,
+    renderCalls,
+    runIdleCallbacks,
+    pendingIdleCallbacks,
+    runTimers,
+    pendingTimers
+  } = loadPreviewPageForTest({ idleCallbacks: true, fakeTimers: true })
+  const page = new PreviewPage({})
+
+  const refresh = (line, graph) => page.onRefreshContent({
+    options: { sync_scroll_type: 'middle' },
+    isActive: true,
+    winline: 1,
+    winheight: 20,
+    cursor: [0, line, 1, 0],
+    pageTitle: '',
+    theme: 'light',
+    name: '/tmp/diagram.md',
+    content: ['    ```mermaid', `    ${graph}`, '    ```']
+  })
+
+  refresh(1, 'graph TD;')
+  await flushPromises()
+  assert.match(page.state.content, /graph TD;/)
+  assert.deepStrictEqual(renderCalls, ['    ```mermaid\n    graph TD;\n    ```'])
+  assert.strictEqual(pendingIdleCallbacks(), 1)
+
+  refresh(2, 'graph LR;')
+  assert.strictEqual(pendingIdleCallbacks(), 0)
+  assert.strictEqual(pendingTimers(), 1)
+
+  runTimers()
+  await flushPromises()
+  assert.strictEqual(pendingTimers(), 0)
+  assert.strictEqual(pendingIdleCallbacks(), 1)
+
+  runIdleCallbacks()
+  await flushPromises()
+  assert.match(page.state.content, /graph LR;/)
+  assert.strictEqual(pendingIdleCallbacks(), 1)
+
+  runIdleCallbacks()
+  await flushPromises()
+  assert.strictEqual(pendingIdleCallbacks(), 0)
+  assert.deepStrictEqual(renderCalls, [
+    '    ```mermaid\n    graph TD;\n    ```',
+    '    ```mermaid\n    graph LR;\n    ```'
+  ])
+
+  page.onRefreshContent({
+    options: { sync_scroll_type: 'middle' },
+    isActive: true,
+    winline: 1,
+    winheight: 20,
+    cursor: [0, 3, 1, 0],
+    pageTitle: '',
+    theme: 'light',
+    name: '/tmp/diagram.md',
+    content: ['# Plain']
+  })
+  assert.strictEqual(pendingTimers(), 1)
+
+  runTimers()
+  await flushPromises()
+  assert.strictEqual(pendingTimers(), 0)
+  assert.strictEqual(pendingIdleCallbacks(), 1)
+
+  runIdleCallbacks()
+  await flushPromises()
+  assert.match(page.state.content, /# Plain/)
+  assert.strictEqual(pendingIdleCallbacks(), 0)
+  assert.deepStrictEqual(renderCalls, [
+    '    ```mermaid\n    graph TD;\n    ```',
+    '    ```mermaid\n    graph LR;\n    ```',
+    '# Plain'
+  ])
+}
+
 async function testPlainMarkdownSkipsMathAssets () {
   const { PreviewPage, scripts, styles } = loadPreviewPageForTest()
   const page = new PreviewPage({})
@@ -1482,6 +1562,7 @@ async function main () {
   testDebouncedContentRefresh()
   testHighFrequencyLogsAreDebugOnly()
   await testFollowupRenderWaitsForIdleAndCancelsStaleWork()
+  await testEnhancedPostRenderWaitsForIdleAndCancelsStaleWork()
   testFreshRefreshSkipsFullContent()
   testSelectivePostRenderGates()
   testChartRendererIsLazyChunk()
