@@ -116,6 +116,59 @@ function testRenderErrorUsesTextContent () {
   assert.strictEqual(replaced[0], created[0])
 }
 
+function testHighlightLanguageSubset () {
+  const page = read('app', 'pages', 'index.jsx')
+  assert.match(page, /import hljs from '\.\/highlight'/)
+  assert.doesNotMatch(page, /from 'highlight\.js'/)
+
+  const highlighter = read('app', 'pages', 'highlight.js')
+  assert.match(highlighter, /from 'highlight\.js\/lib\/core'/)
+  assert.doesNotMatch(highlighter, /from 'highlight\.js'|require\(['"]highlight\.js['"]\)/)
+  ;[
+    'java',
+    'python',
+    'c',
+    'cpp',
+    'sql',
+    'pgsql',
+    'bash',
+    'shell',
+    'xml',
+    'yaml',
+    'markdown',
+    'latex',
+    'x86asm',
+    'mipsasm',
+    'plaintext'
+  ].forEach((language) => {
+    assert.match(highlighter, new RegExp(`highlight\\.js/lib/languages/${language}`))
+  })
+  assert.match(highlighter, /registerAliases\(\['assembly', 'asm'\], \{ languageName: 'x86asm' \}\)/)
+  assert.match(highlighter, /registerAliases\('mips', \{ languageName: 'mipsasm' \}\)/)
+}
+
+function testHighlightRuntimeSubset () {
+  const source = read('app', 'pages', 'highlight.js')
+    .replace(/import ([a-zA-Z0-9_]+) from '([^']+)'/g, "const $1 = require('$2')")
+    .replace('export default hljs', 'module.exports = hljs')
+  const context = {
+    module: { exports: {} },
+    require
+  }
+
+  vm.runInNewContext(source, context)
+  const hljs = context.module.exports
+
+  assert.ok(hljs.getLanguage('java'), 'expected Java highlighting')
+  assert.ok(hljs.getLanguage('python'), 'expected Python highlighting')
+  assert.ok(hljs.getLanguage('assembly'), 'expected assembly alias')
+  assert.ok(hljs.getLanguage('mips'), 'expected MIPS alias')
+  assert.strictEqual(hljs.getLanguage('accesslog'), undefined)
+
+  const highlighted = hljs.highlight('java', 'public class A {}', true).value
+  assert.match(highlighted, /hljs-keyword/)
+}
+
 function testScrollSource () {
   const scrollSource = read('app', 'pages', 'scroll.js')
 
@@ -280,10 +333,16 @@ function testBuiltPreviewBundle () {
   assert.ok(pageBundle, 'expected built Next.js pages/index.js bundle')
 
   const bundle = fs.readFileSync(pageBundle, 'utf8')
+  const bundleSize = fs.statSync(pageBundle).size
   assert.match(bundle, /getBoundingClientRect\(\)\.top/)
   assert.match(bundle, /admonition\.css/)
   assert.doesNotMatch(bundle, /TweenLite\.to|Power2\.easeOut/)
   assert.doesNotMatch(bundle, /Chart\.js v2\./)
+  assert.doesNotMatch(bundle, /accesslog/)
+  assert.ok(
+    bundleSize < 1150000,
+    `expected lean preview page bundle after optional dependency trimming, got ${bundleSize}`
+  )
 }
 
 function testRuntimeSelection () {
@@ -527,6 +586,8 @@ function testBuildCacheHygiene () {
 testAdmonitionRendering()
 testChartFenceRendering()
 testRenderErrorUsesTextContent()
+testHighlightLanguageSubset()
+testHighlightRuntimeSubset()
 testScrollSource()
 testScrollRuntimeUsesDocumentOffset()
 testScrollRuntimeInterpolatesIndentedAdmonitionBody()
