@@ -1,6 +1,5 @@
 import React from 'react'
 import Head from 'next/head'
-import io from 'socket.io-client'
 import MarkdownIt from 'markdown-it'
 import hljs from './highlight'
 import emoji from 'markdown-it-emoji'
@@ -21,6 +20,7 @@ import flowchart, { renderFlowchart } from './flowchart'
 import dot, { renderDot } from './dot'
 import blockUml from './blockPlantuml'
 import codeUml from './plantuml'
+import createPreviewSocket from './preview-socket'
 import scrollToLine from './scroll'
 import { meta } from './meta';
 import markdownImSize from './markdown-it-imsize'
@@ -228,11 +228,7 @@ export default class PreviewPage extends React.Component {
 
     window.history.replaceState(null, '', `/${bufnr}`)
 
-    const socket = io({
-      query: {
-        bufnr
-      }
-    })
+    const socket = createPreviewSocket(bufnr)
 
     window.socket = socket
 

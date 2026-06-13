@@ -477,7 +477,7 @@ Vim support is powered by [@chemzqm/neovim](https://github.com/neoclide/neovim)
 - [mermaid](https://github.com/knsv/mermaid)
 - [opener](https://github.com/domenic/opener)
 - [sequence-diagrams](https://github.com/bramp/js-sequence-diagrams)
-- [socket.io](https://github.com/socketio/socket.io)
+- [ws](https://github.com/websockets/ws)
 
 ### Buy Me A Coffee ☕️
 

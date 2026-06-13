@@ -3,7 +3,8 @@ exports.run = function () {
   const { plugin } = require('./nvim')
   const http = require('http')
   const net = require('net')
-  const websocket = require('socket.io')
+  const { URL } = require('url')
+  const WebSocket = require('ws')
 
   const opener = require('./lib/util/opener')
   const logger = require('./lib/util/logger')('app/server')
@@ -12,6 +13,7 @@ exports.run = function () {
 
   let clients = {}
   let contentTicks = {}
+  let nextClientId = 1
   const startBufnr = Number(process.env.MKDP_START_BUFNR) || 0
 
   const openUrl = (url, browser) => {
@@ -28,7 +30,7 @@ exports.run = function () {
   }
 
   const connectedClients = (bufnr) =>
-    (clients[bufnr] || []).filter(client => client.connected)
+    (clients[bufnr] || []).filter(client => client.readyState === WebSocket.OPEN)
 
   const normalizeTick = (changedtick) =>
     changedtick === undefined || changedtick === null ? '' : String(changedtick)
@@ -57,14 +59,22 @@ exports.run = function () {
     clients[bufnr].forEach(callback)
   }
 
+  const sendToClient = (client, event, data) => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(JSON.stringify({ event, data }))
+    }
+  }
+
   const emitToClients = (bufnr, event, data) => {
     forEachConnectedClient(bufnr, client => {
-      client.emit(event, data)
+      sendToClient(client, event, data)
     })
   }
 
   const closeClients = (bufnr) => {
     emitToClients(bufnr, 'close_page')
+    const clientsToClose = clients[bufnr] || []
+    clientsToClose.forEach(client => client.close())
     delete clients[bufnr]
     clearContentFresh(bufnr)
   }
@@ -178,11 +188,21 @@ exports.run = function () {
   })
 
   // websocket server
-  const io = websocket(server)
+  const websocketServer = new WebSocket.Server({
+    server,
+    path: '/ws'
+  })
 
-  io.on('connection', async (client) => {
-    const { handshake = { query: {} } } = client
-    const bufnr = handshake.query.bufnr
+  websocketServer.on('connection', async (client, req) => {
+    const params = new URL(req.url, 'http://localhost').searchParams
+    const bufnr = params.get('bufnr')
+    client.id = nextClientId
+    nextClientId += 1
+
+    if (!bufnr) {
+      client.close()
+      return
+    }
 
     logger.info('client connect: ', client.id, bufnr)
 
@@ -192,7 +212,7 @@ exports.run = function () {
     update_clients_active_var();
 
     const buffers = await plugin.nvim.buffers
-    buffers.forEach(async (buffer) => {
+    for (const buffer of buffers) {
       if (buffer.id === Number(bufnr)) {
         const winline = await plugin.nvim.call('winline')
         const currentWindow = await plugin.nvim.window
@@ -205,7 +225,7 @@ exports.run = function () {
         const content = await buffer.getLines()
         const changedtick = await plugin.nvim.call('getbufvar', [buffer.id, 'changedtick'])
         const currentBuffer = await plugin.nvim.buffer
-        client.emit('refresh_content', {
+        sendToClient(client, 'refresh_content', {
           options,
           isActive: currentBuffer.id === buffer.id,
           winline,
@@ -218,10 +238,11 @@ exports.run = function () {
           changedtick
         })
         markContentFresh({ bufnr, changedtick })
+        break
       }
-    })
+    }
 
-    client.on('disconnect', function () {
+    client.on('close', function () {
       logger.info('disconnect: ', client.id)
       clients[bufnr] = (clients[bufnr] || []).filter(c => c.id !== client.id)
       if (clients[bufnr].length === 0) {
@@ -269,7 +290,7 @@ exports.run = function () {
         logger.info(`combine preview page: `, bufnr)
         Object.keys(clients).forEach(clientBufnr => {
           forEachConnectedClient(clientBufnr, client => {
-            client.emit('change_bufnr', bufnr)
+            sendToClient(client, 'change_bufnr', bufnr)
           })
         })
       } else {

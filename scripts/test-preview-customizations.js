@@ -200,6 +200,107 @@ function testPlantumlRendererRuntime () {
   )
 }
 
+function testNativePreviewSocketRuntime () {
+  const source = read('app', 'pages', 'preview-socket.js')
+    .replace('export default function createPreviewSocket', 'module.exports = function createPreviewSocket')
+  const instances = []
+  const refreshes = []
+  let timeoutScheduled = false
+
+  function FakeWebSocket (url) {
+    this.url = url
+    this.readyState = FakeWebSocket.OPEN
+    instances.push(this)
+  }
+  FakeWebSocket.OPEN = 1
+  FakeWebSocket.prototype.close = function () {
+    this.readyState = 3
+  }
+
+  const context = {
+    module: { exports: {} },
+    console,
+    WebSocket: FakeWebSocket,
+    window: {
+      location: {
+        protocol: 'http:',
+        host: 'localhost:18282'
+      }
+    },
+    setTimeout: () => {
+      timeoutScheduled = true
+      return 1
+    },
+    clearTimeout: () => {}
+  }
+
+  vm.runInNewContext(source, context)
+  const socket = context.module.exports(12)
+  socket.on('refresh_content', (data) => refreshes.push(data))
+
+  assert.strictEqual(instances[0].url, 'ws://localhost:18282/ws?bufnr=12')
+  instances[0].onmessage({
+    data: JSON.stringify({
+      event: 'refresh_content',
+      data: { len: 1258 }
+    })
+  })
+  assert.deepStrictEqual(refreshes, [{ len: 1258 }])
+
+  socket.close()
+  instances[0].onclose()
+  assert.strictEqual(timeoutScheduled, false)
+}
+
+function testNativePreviewSocketIgnoresStaleEvents () {
+  const source = read('app', 'pages', 'preview-socket.js')
+    .replace('export default function createPreviewSocket', 'module.exports = function createPreviewSocket')
+  const instances = []
+  let reconnect = null
+
+  function FakeWebSocket (url) {
+    this.url = url
+    this.readyState = FakeWebSocket.OPEN
+    this.closeCount = 0
+    instances.push(this)
+  }
+  FakeWebSocket.OPEN = 1
+  FakeWebSocket.prototype.close = function () {
+    this.closeCount += 1
+    this.readyState = 3
+  }
+
+  const context = {
+    module: { exports: {} },
+    console,
+    WebSocket: FakeWebSocket,
+    window: {
+      location: {
+        protocol: 'http:',
+        host: 'localhost:18282'
+      }
+    },
+    setTimeout: (callback, delay) => {
+      assert.strictEqual(delay, 500)
+      reconnect = callback
+      return 1
+    },
+    clearTimeout: () => {}
+  }
+
+  vm.runInNewContext(source, context)
+  context.module.exports(12)
+  instances[0].onclose()
+  assert.ok(reconnect, 'expected reconnect after unexpected close')
+
+  reconnect()
+  assert.strictEqual(instances.length, 2)
+
+  instances[0].onerror()
+  assert.strictEqual(instances[0].closeCount, 1)
+  assert.strictEqual(instances[1].closeCount, 0)
+}
+
 function testHighlightLanguageSubset () {
   const page = read('app', 'pages', 'index.jsx')
   assert.match(page, /import hljs from '\.\/highlight'/)
@@ -423,6 +524,7 @@ function testBuiltPreviewBundle () {
   assert.doesNotMatch(bundle, /TweenLite\.to|Power2\.easeOut/)
   assert.doesNotMatch(bundle, /Chart\.js v2\./)
   assert.doesNotMatch(bundle, /pako|deflate/)
+  assert.doesNotMatch(bundle, /socket\.io|engine\.io|parseqs|socket\.io-parser/)
   assert.doesNotMatch(bundle, /accesslog/)
   assert.ok(
     bundleSize < 700000,
@@ -483,6 +585,39 @@ function testMultiPortSupport () {
   assert.doesNotMatch(server, /map\(c => c\.id !== client\.id\)/)
   assert.match(server, /const url = `http:\/\/\$\{openHost\}:\$\{port\}\/page\/\$\{bufnr\}`/)
   assert.match(server, /mkdp#util#open_browser', \[startBufnr\]/)
+}
+
+function testNativePreviewTransport () {
+  const page = read('app', 'pages', 'index.jsx')
+  assert.match(page, /import createPreviewSocket from '\.\/preview-socket'/)
+  assert.match(page, /const socket = createPreviewSocket\(bufnr\)/)
+  assert.doesNotMatch(page, /socket\.io-client|\bio\(/)
+
+  const previewSocket = read('app', 'pages', 'preview-socket.js')
+  assert.match(previewSocket, /new WebSocket\(socketUrl\(bufnr\)\)/)
+  assert.match(previewSocket, /\/ws\?bufnr=/)
+  assert.match(previewSocket, /JSON\.parse\(event\.data\)/)
+  assert.match(previewSocket, /setTimeout\(connect, reconnectDelay\)/)
+
+  const server = read('app', 'server.js')
+  assert.match(server, /const WebSocket = require\('ws'\)/)
+  assert.match(server, /new WebSocket\.Server\(\{/)
+  assert.match(server, /path: '\/ws'/)
+  assert.match(server, /client\.send\(JSON\.stringify\(\{ event, data \}\)\)/)
+  assert.doesNotMatch(server, /socket\.io|client\.emit\(/)
+
+  const preload = read('src', 'app', 'preloadmodules.ts')
+  assert.match(preload, /const ws = require\('ws'\)/)
+  assert.doesNotMatch(preload, /socket\.io/)
+
+  const pkg = JSON.parse(read('package.json'))
+  assert.ok(pkg.dependencies.ws, 'expected ws dependency')
+  assert.strictEqual(pkg.dependencies['socket.io'], undefined)
+  assert.strictEqual(pkg.dependencies['socket.io-client'], undefined)
+
+  const appPkg = JSON.parse(read('app', 'package.json'))
+  assert.ok(appPkg.dependencies.ws, 'expected app ws dependency')
+  assert.strictEqual(appPkg.dependencies['socket.io'], undefined)
 }
 
 function testCursorSyncUsesLightweightEvent () {
@@ -706,6 +841,8 @@ testChartFenceRendering()
 testRenderErrorUsesTextContent()
 testPlantumlPlaceholderRendering()
 testPlantumlRendererRuntime()
+testNativePreviewSocketRuntime()
+testNativePreviewSocketIgnoresStaleEvents()
 testHighlightLanguageSubset()
 testHighlightRuntimeSubset()
 testScrollSource()
@@ -715,6 +852,7 @@ testScrollRuntimeCachesSourceLineAnchors()
 testBuiltPreviewBundle()
 testRuntimeSelection()
 testMultiPortSupport()
+testNativePreviewTransport()
 testCursorSyncUsesLightweightEvent()
 testFreshRefreshSkipsFullContent()
 testSelectivePostRenderGates()
