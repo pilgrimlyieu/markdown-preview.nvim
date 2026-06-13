@@ -828,8 +828,18 @@ async function flushPromises () {
   await Promise.resolve()
 }
 
+async function waitForCondition (condition, message) {
+  for (let i = 0; i < 10; i += 1) {
+    await flushPromises()
+    if (condition()) {
+      return
+    }
+  }
+  assert.fail(typeof message === 'function' ? message() : message)
+}
+
 async function testAsyncMathRenderUsesLatestScrollPayload () {
-  const { PreviewPage, scripts, styles, scrollCalls } = loadPreviewPageForTest()
+  const { PreviewPage, scripts, styles, scrollCalls, renderCalls } = loadPreviewPageForTest()
   const page = new PreviewPage({})
 
   page.onRefreshContent({
@@ -849,7 +859,8 @@ async function testAsyncMathRenderUsesLatestScrollPayload () {
   assert.strictEqual(scripts[0].src, '/_static/katex@0.15.3.js')
   assert.strictEqual(styles.length, 1)
   assert.strictEqual(styles[0].href, '/_static/katex@0.15.3.css')
-  assert.strictEqual(page.state.content, '')
+  assert.match(page.state.content, /\$x\^2\$/)
+  assert.deepStrictEqual(renderCalls, ['# Math\n$x^2$'])
 
   page.onSyncScroll({
     options: { sync_scroll_type: 'middle' },
@@ -863,11 +874,120 @@ async function testAsyncMathRenderUsesLatestScrollPayload () {
 
   styles[0].onload()
   scripts[0].onload()
-  await flushPromises()
+  await waitForCondition(
+    () => renderCalls.length === 2,
+    'expected math content to rerender after KaTeX assets load'
+  )
 
   assert.match(page.state.content, /\$x\^2\$/)
   assert.strictEqual(page.state.cursor[1], 36)
   assert.strictEqual(scrollCalls[scrollCalls.length - 1].cursor, 36)
+  assert.deepStrictEqual(renderCalls, ['# Math\n$x^2$', '# Math\n$x^2$'])
+}
+
+async function testInitialMhchemLoadWaitsForKatex () {
+  const { PreviewPage, scripts, styles, renderCalls } = loadPreviewPageForTest()
+  const page = new PreviewPage({})
+
+  page.onRefreshContent({
+    options: { sync_scroll_type: 'middle' },
+    isActive: true,
+    winline: 1,
+    winheight: 20,
+    cursor: [0, 1, 1, 0],
+    pageTitle: '',
+    theme: 'light',
+    name: '/tmp/math.md',
+    content: ['$\\ce{H2O}$']
+  })
+  await flushPromises()
+
+  assert.strictEqual(styles.length, 1)
+  assert.strictEqual(styles[0].href, '/_static/katex@0.15.3.css')
+  assert.strictEqual(scripts.length, 1)
+  assert.strictEqual(scripts[0].src, '/_static/katex@0.15.3.js')
+  assert.deepStrictEqual(renderCalls, ['$\\ce{H2O}$'])
+
+  styles[0].onload()
+  scripts[0].onload()
+  await waitForCondition(
+    () => scripts.length === 2,
+    'expected mhchem script to load after KaTeX is ready'
+  )
+  assert.strictEqual(scripts.length, 2)
+  assert.strictEqual(scripts[1].src, '/_static/mhchem.min.js')
+
+  scripts[1].onload()
+  await waitForCondition(
+    () => renderCalls.length === 2,
+    'expected mhchem content to rerender after KaTeX and mhchem assets load'
+  )
+  assert.deepStrictEqual(renderCalls, ['$\\ce{H2O}$', '$\\ce{H2O}$'])
+}
+
+async function testMhchemLoadsAfterKatexIsReady () {
+  const {
+    PreviewPage,
+    scripts,
+    styles,
+    renderCalls,
+    runIdleCallbacks,
+    pendingIdleCallbacks,
+    runTimers,
+    pendingTimers
+  } = loadPreviewPageForTest({ idleCallbacks: true, fakeTimers: true })
+  const page = new PreviewPage({})
+
+  page.onRefreshContent({
+    options: { sync_scroll_type: 'middle' },
+    isActive: true,
+    winline: 1,
+    winheight: 20,
+    cursor: [0, 1, 1, 0],
+    pageTitle: '',
+    theme: 'light',
+    name: '/tmp/math.md',
+    content: ['$x^2$']
+  })
+  await flushPromises()
+  assert.strictEqual(styles[0].href, '/_static/katex@0.15.3.css')
+  assert.strictEqual(scripts[0].src, '/_static/katex@0.15.3.js')
+
+  styles[0].onload()
+  scripts[0].onload()
+  await waitForCondition(
+    () => renderCalls.length === 2,
+    'expected initial math content to rerender after KaTeX assets load'
+  )
+  assert.deepStrictEqual(renderCalls, ['$x^2$', '$x^2$'])
+
+  page.onRefreshContent({
+    options: { sync_scroll_type: 'middle' },
+    isActive: true,
+    winline: 1,
+    winheight: 20,
+    cursor: [0, 2, 1, 0],
+    pageTitle: '',
+    theme: 'light',
+    name: '/tmp/math.md',
+    content: ['$\\ce{H2O}$']
+  })
+  assert.strictEqual(pendingTimers(), 1)
+
+  runTimers()
+  await flushPromises()
+  assert.strictEqual(pendingIdleCallbacks(), 1)
+
+  runIdleCallbacks()
+  await flushPromises()
+  assert.strictEqual(scripts[1].src, '/_static/mhchem.min.js')
+
+  scripts[1].onload()
+  await waitForCondition(
+    () => renderCalls.length === 4,
+    'expected mhchem content to rerender after mhchem assets load'
+  )
+  assert.deepStrictEqual(renderCalls, ['$x^2$', '$x^2$', '$\\ce{H2O}$', '$\\ce{H2O}$'])
 }
 
 async function testFollowupRenderWaitsForIdleAndCancelsStaleWork () {
@@ -1636,7 +1756,8 @@ function testStaticRouteRuntimeAvoidsNvimVarLookups () {
 
   childProcess.execFileSync(process.execPath, ['-e', script], {
     cwd: root,
-    stdio: 'pipe'
+    stdio: 'pipe',
+    timeout: 10000
   })
 }
 
@@ -1657,6 +1778,8 @@ async function main () {
   testScrollRuntimeCachesSourceLineAnchors()
   testScrollRuntimeCoalescesAnimationFrame()
   await testAsyncMathRenderUsesLatestScrollPayload()
+  await testInitialMhchemLoadWaitsForKatex()
+  await testMhchemLoadsAfterKatexIsReady()
   await testPlainMarkdownSkipsMathAssets()
   testBuiltPreviewBundle()
   testRuntimeSelection()

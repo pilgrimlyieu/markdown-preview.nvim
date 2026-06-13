@@ -106,20 +106,6 @@ const loadLazyStyles = (hrefs) =>
 const loadLazyScripts = (sources) =>
   sources.reduce((chain, src) => chain.then(() => loadLazyScript(src)), Promise.resolve())
 
-const loadRenderDependencies = (source) => {
-  if (!contentUsesMath(source)) {
-    return Promise.resolve()
-  }
-
-  const scripts = contentUsesMhchem(source)
-    ? KATEX_SCRIPTS.concat(MHCHEM_SCRIPT)
-    : KATEX_SCRIPTS
-  return Promise.all([
-    loadLazyStyles(KATEX_STYLES),
-    loadLazyScripts(scripts)
-  ])
-}
-
 const scheduleIdleWork = (callback) => {
   if (typeof window.requestIdleCallback === 'function') {
     const id = window.requestIdleCallback(callback, { timeout: IDLE_RENDER_TIMEOUT })
@@ -205,7 +191,12 @@ export default class PreviewPage extends React.Component {
     this.rendererPromise = null
     this.highlighterPromise = null
     this.highlighter = null
+    this.katexPromise = null
+    this.katexReady = false
+    this.mhchemPromise = null
+    this.mhchemReady = false
     this.mdUsesHighlighter = false
+    this.pendingRenderUpgrades = {}
     this.bufnr = -1;
 
     this.state = {
@@ -249,6 +240,56 @@ export default class PreviewPage extends React.Component {
     return this.highlighterPromise
   }
 
+  loadKatexDependencies() {
+    if (this.katexReady) {
+      return Promise.resolve()
+    }
+    if (!this.katexPromise) {
+      this.katexPromise = Promise.all([
+        loadLazyStyles(KATEX_STYLES),
+        loadLazyScripts(KATEX_SCRIPTS)
+      ])
+        .then(() => {
+          this.katexReady = true
+        })
+        .catch((error) => {
+          this.katexPromise = null
+          throw error
+        })
+    }
+    return this.katexPromise
+  }
+
+  loadMhchemDependency() {
+    if (this.mhchemReady) {
+      return Promise.resolve()
+    }
+    if (!this.mhchemPromise) {
+      this.mhchemPromise = loadLazyScripts([MHCHEM_SCRIPT])
+        .then(() => {
+          this.mhchemReady = true
+        })
+        .catch((error) => {
+          this.mhchemPromise = null
+          throw error
+        })
+    }
+    return this.mhchemPromise
+  }
+
+  loadMathDependencies(source) {
+    return this.loadKatexDependencies()
+      .then(() => {
+        if (contentUsesMhchem(source)) {
+          return this.loadMhchemDependency()
+        }
+      })
+  }
+
+  mathDependenciesReady(source) {
+    return this.katexReady && (!contentUsesMhchem(source) || this.mhchemReady)
+  }
+
   cancelQueuedRender() {
     if (this.renderTimer !== undefined) {
       clearTimeout(this.renderTimer)
@@ -290,9 +331,26 @@ export default class PreviewPage extends React.Component {
     })
   }
 
+  startRenderUpgrade(type, renderVersion) {
+    if (this.pendingRenderUpgrades[type] === renderVersion) {
+      return null
+    }
+    this.pendingRenderUpgrades[type] = renderVersion
+    return () => {
+      if (this.pendingRenderUpgrades[type] === renderVersion) {
+        this.pendingRenderUpgrades[type] = null
+      }
+    }
+  }
+
   upgradeCodeHighlighting(renderVersion, markdownRenderer, options, source, applyRender) {
+    const clearPending = this.startRenderUpgrade('highlight', renderVersion)
+    if (!clearPending) {
+      return
+    }
     this.loadHighlighter()
       .then((highlighter) => {
+        clearPending()
         if (renderVersion !== this.renderVersion || this.mdUsesHighlighter) {
           return
         }
@@ -301,6 +359,26 @@ export default class PreviewPage extends React.Component {
         applyRender(markdownRenderer, this.md.render(source))
       })
       .catch((error) => {
+        clearPending()
+        console.error(error)
+      })
+  }
+
+  upgradeMathRendering(renderVersion, markdownRenderer, source, applyRender) {
+    const clearPending = this.startRenderUpgrade('math', renderVersion)
+    if (!clearPending) {
+      return
+    }
+    this.loadMathDependencies(source)
+      .then(() => {
+        clearPending()
+        if (renderVersion !== this.renderVersion) {
+          return
+        }
+        applyRender(markdownRenderer, this.md.render(source))
+      })
+      .catch((error) => {
+        clearPending()
         console.error(error)
       })
   }
@@ -451,6 +529,7 @@ export default class PreviewPage extends React.Component {
     const renderVersion = this.invalidatePendingRender()
     const refreshEnhancedBlocks = contentUsesEnhancedBlocks(newContent)
     const refreshHighlightedBlocks = contentUsesHighlighting(newContent)
+    const refreshMathBlocks = contentUsesMath(newContent)
 
     const applyRender = (markdownRenderer, renderedContent) => {
       const latestScroll = this.latestScroll || scrollPayload
@@ -474,15 +553,15 @@ export default class PreviewPage extends React.Component {
         if (refreshHighlightedBlocks && !this.mdUsesHighlighter) {
           this.upgradeCodeHighlighting(renderVersion, markdownRenderer, options, newContent, applyRender)
         }
+        if (refreshMathBlocks && !this.mathDependenciesReady(newContent)) {
+          this.upgradeMathRendering(renderVersion, markdownRenderer, newContent, applyRender)
+        }
       })
     }
 
     const refreshRender = (deferRender) => {
-      Promise.all([
-        this.loadMarkdownRenderer(),
-        loadRenderDependencies(newContent)
-      ])
-        .then(([markdownRenderer]) => {
+      this.loadMarkdownRenderer()
+        .then((markdownRenderer) => {
           if (renderVersion !== this.renderVersion) {
             return
           }
