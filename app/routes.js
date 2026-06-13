@@ -106,7 +106,7 @@ use((req, res, next) => {
 
 // images
 use(async (req, res, next) => {
-  logger.info('image route: ', req.asPath)
+  logger.debug('image route: ', req.asPath)
   const reg = /^\/_local_image_/
   if (reg.test(req.asPath) && req.asPath !== '') {
     const plugin = req.plugin
@@ -120,7 +120,7 @@ use(async (req, res, next) => {
         fileDir = await plugin.nvim.call('expand', `#${req.bufnr}:p:h`)
       }
 
-      logger.info('fileDir', fileDir)
+      logger.debug('fileDir', fileDir)
 
       const  mingw_home=process.env.MINGW_HOME;
       if (mingw_home){
@@ -129,13 +129,13 @@ use(async (req, res, next) => {
           // the win-like fileDir should be: Z:\x\y...
           const cygpath = 'cygpath.exe'
           const cmd=cygpath+' -w'+' -a '+fileDir ;
-          logger.info('cmd',cmd)
+          logger.debug('cmd',cmd)
        
           const { execSync } = require('node:child_process');
           const result = execSync(cmd);
           fileDir=result.toString('utf8').replace('\n','');
 
-          logger.info('New fileDir',fileDir);
+          logger.debug('New fileDir',fileDir);
         }  
       }
 
@@ -154,7 +154,7 @@ use(async (req, res, next) => {
           }
         }
       }
-      logger.info('imgPath', imgPath);
+      logger.debug('imgPath', imgPath);
       
       if (fs.existsSync(imgPath) && !fs.statSync(imgPath).isDirectory()) {
         if (imgPath.endsWith('svg')) {

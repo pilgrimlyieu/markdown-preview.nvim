@@ -266,12 +266,12 @@ exports.run = function () {
     })
     logger.info('server run: ', port)
     function refreshPage ({ bufnr, data }) {
-      logger.info('refresh page: ', bufnr)
+      logger.debug('refresh page: ', bufnr)
       markContentFresh({ bufnr, changedtick: data.changedtick })
       emitToClients(bufnr, 'refresh_content', data)
     }
     function syncScroll ({ bufnr, data }) {
-      logger.info('sync scroll: ', bufnr)
+      logger.debug('sync scroll: ', bufnr)
       emitToClients(bufnr, 'sync_scroll', data)
     }
     function closePage ({ bufnr }) {

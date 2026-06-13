@@ -1016,6 +1016,23 @@ function testDebouncedContentRefresh () {
   assert.match(readme, /let g:mkdp_refresh_debounce = 160/)
 }
 
+function testHighFrequencyLogsAreDebugOnly () {
+  const server = read('app', 'server.js')
+  assert.match(server, /logger\.debug\('refresh page: ', bufnr\)/)
+  assert.match(server, /logger\.debug\('sync scroll: ', bufnr\)/)
+  assert.doesNotMatch(server, /logger\.info\('refresh page: '/)
+  assert.doesNotMatch(server, /logger\.info\('sync scroll: '/)
+  assert.match(server, /logger\.info\('server run: ', port\)/)
+
+  const routes = read('app', 'routes.js')
+  assert.match(routes, /logger\.debug\('image route: ', req\.asPath\)/)
+  assert.match(routes, /logger\.debug\('fileDir', fileDir\)/)
+  assert.match(routes, /logger\.debug\('imgPath', imgPath\)/)
+  assert.doesNotMatch(routes, /logger\.info\('image route: '/)
+  assert.doesNotMatch(routes, /logger\.info\('fileDir'/)
+  assert.doesNotMatch(routes, /logger\.info\('imgPath'/)
+}
+
 function testFreshRefreshSkipsFullContent () {
   const attach = read('src', 'attach', 'index.ts')
   assert.match(attach, /const getChangedtick = \(bufnr/)
@@ -1225,6 +1242,7 @@ async function main () {
   testNativePreviewTransport()
   testCursorSyncUsesLightweightEvent()
   testDebouncedContentRefresh()
+  testHighFrequencyLogsAreDebugOnly()
   testFreshRefreshSkipsFullContent()
   testSelectivePostRenderGates()
   testChartRendererIsLazyChunk()
