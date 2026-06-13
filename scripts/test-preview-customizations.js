@@ -226,12 +226,23 @@ function testCursorSyncUsesLightweightEvent () {
   assert.match(rpc, /timer_stop\(s:sync_scroll_timers\[l:key\]\)/)
   assert.match(rpc, /remove\(s:sync_scroll_timers, l:key\)/)
   assert.match(rpc, /call s:clear_all_sync_scroll_timers\(\)/)
+  assert.match(rpc, /function! s:sync_scroll_data\(bufnr\)/)
+  assert.match(rpc, /'winline': winline\(\)/)
+  assert.match(rpc, /'winheight': winheight\(0\)/)
+  assert.match(rpc, /'cursor': getpos\('\.'\)/)
+  assert.match(rpc, /'len': line\('\$'\)/)
+  assert.match(rpc, /s:notify_server\(a:bufnr, 'sync_scroll', s:sync_scroll_data\(a:bufnr\)\)/)
   assert.match(rpc, /timer_start\(l:delay, function\('s:send_sync_scroll', \[l:bufnr\]\)\)/)
   assert.match(rpc, /function! mkdp#rpc#preview_sync_scroll\(\)/)
   assert.match(rpc, /'sync_scroll'/)
 
   const attach = read('src', 'attach', 'index.ts')
   assert.match(attach, /const getScrollData = async/)
+  assert.match(attach, /method === 'sync_scroll' && opts\.data/)
+  assert.ok(
+    attach.indexOf("method === 'sync_scroll' && opts.data") < attach.indexOf('const buffer = await findBuffer(bufnr)'),
+    'expected precomputed sync scroll payload to avoid buffer lookup'
+  )
   assert.match(attach, /method === 'refresh_content' \|\| method === 'sync_scroll'/)
   assert.match(attach, /app\.syncScroll/)
   assert.match(attach, /nvim\.call\('line', \['\$'\]\)/)

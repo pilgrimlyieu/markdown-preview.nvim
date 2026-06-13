@@ -61,6 +61,13 @@ export default function(options: Attach): IPlugin {
   nvim.on('notification', async (method: string, args: any[]) => {
     const opts = args[0] || args
     const bufnr = opts.bufnr
+    if (method === 'sync_scroll' && opts.data) {
+      app.syncScroll({
+        bufnr,
+        data: opts.data
+      })
+      return
+    }
     if (method === 'refresh_content' || method === 'sync_scroll') {
       const buffer = await findBuffer(bufnr)
       if (!buffer) {

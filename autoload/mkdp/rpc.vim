@@ -69,12 +69,26 @@ function! s:clear_all_sync_scroll_timers() abort
   endfor
 endfunction
 
+function! s:sync_scroll_data(bufnr) abort
+  return {
+        \ 'bufnr': a:bufnr,
+        \ 'data': {
+        \   'options': get(g:, 'mkdp_preview_options', {}),
+        \   'isActive': 1,
+        \   'winline': winline(),
+        \   'winheight': winheight(0),
+        \   'cursor': getpos('.'),
+        \   'len': line('$')
+        \ }
+        \ }
+endfunction
+
 function! s:send_sync_scroll(bufnr, ...) abort
   call s:clear_sync_scroll_timer(a:bufnr)
   if bufnr('%') !=# a:bufnr
     return
   endif
-  call s:notify_server(a:bufnr, 'sync_scroll', { 'bufnr': a:bufnr })
+  call s:notify_server(a:bufnr, 'sync_scroll', s:sync_scroll_data(a:bufnr))
 endfunction
 
 function! s:on_stdout(chan_id, msgs, ...) abort
