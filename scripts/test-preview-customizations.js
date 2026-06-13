@@ -44,6 +44,7 @@ function testScrollSource () {
   assert.match(scrollSource, /getBoundingClientRect\(\)\.top \+ scrollTop/)
   assert.match(scrollSource, /distance > 0/)
   assert.doesNotMatch(scrollSource, /\.offsetTop\b/)
+  assert.doesNotMatch(scrollSource, /TweenLite|Power2/)
 }
 
 function testScrollRuntimeUsesDocumentOffset () {
@@ -58,7 +59,12 @@ function testScrollRuntimeUsesDocumentOffset () {
 
   const context = {
     module: { exports: {} },
-    window: { pageYOffset: 300 },
+    window: {
+      pageYOffset: 300,
+      scrollTo: (options) => {
+        scrollCalls.push(options)
+      }
+    },
     document: {
       body: { scrollTop: 300 },
       documentElement: {
@@ -69,13 +75,7 @@ function testScrollRuntimeUsesDocumentOffset () {
       querySelector: (selector) => (
         selector === '[data-source-line="12"]' ? lineElement : null
       )
-    },
-    TweenLite: {
-      to: (_element, _duration, options) => {
-        scrollCalls.push(options.scrollTop)
-      }
-    },
-    Power2: { easeOut: 'easeOut' }
+    }
   }
 
   vm.runInNewContext(source, context)
@@ -86,7 +86,7 @@ function testScrollRuntimeUsesDocumentOffset () {
     len: 100
   })
 
-  assert.deepStrictEqual(scrollCalls, [900, 900])
+  assert.deepStrictEqual(scrollCalls, [{ top: 900, behavior: 'smooth' }])
 }
 
 function testScrollRuntimeInterpolatesIndentedAdmonitionBody () {
@@ -150,6 +150,7 @@ function testBuiltPreviewBundle () {
   const bundle = fs.readFileSync(pageBundle, 'utf8')
   assert.match(bundle, /getBoundingClientRect\(\)\.top/)
   assert.match(bundle, /admonition\.css/)
+  assert.doesNotMatch(bundle, /TweenLite\.to|Power2\.easeOut/)
 }
 
 function testRuntimeSelection () {
@@ -267,9 +268,18 @@ function testSelectivePostRenderGates () {
   assert.match(page, /const mermaidNodes = document\.querySelectorAll\('\.mermaid'\)/)
   assert.match(page, /if \(!mermaidNodes\.length\) \{\n\s+return\n\s+\}/)
   assert.match(page, /if \(hasElement\('\.chartjs'\)\) \{\n\s+chart\.render\(\)/)
-  assert.match(page, /if \(hasElement\('\.sequence-diagrams'\)\) \{\n\s+renderDiagram\(\)/)
-  assert.match(page, /if \(hasElement\('div\.flowchart'\)\) \{\n\s+renderFlowchart\(\)/)
-  assert.match(page, /if \(hasElement\('\.dot'\)\) \{\n\s+renderDot\(\)/)
+  assert.match(page, /renderWithLazyScripts\(MERMAID_SCRIPTS/)
+  assert.match(page, /renderWithLazyScripts\(SEQUENCE_DIAGRAM_SCRIPTS, renderDiagram\)/)
+  assert.match(page, /renderWithLazyScripts\(FLOWCHART_SCRIPTS, renderFlowchart\)/)
+  assert.match(page, /renderWithLazyScripts\(DOT_SCRIPTS, renderDot\)/)
+
+  const html = read('app', 'out', 'index.html')
+  assert.doesNotMatch(html, /\/_static\/mermaid\.min\.js/)
+  assert.doesNotMatch(html, /\/_static\/sequence-diagram-min\.js/)
+  assert.doesNotMatch(html, /\/_static\/tweenlite\.min\.js/)
+  assert.doesNotMatch(html, /\/_static\/flowchart@1\.13\.0\.min\.js/)
+  assert.doesNotMatch(html, /\/_static\/full\.render\.js/)
+  assert.match(html, /\/_static\/katex@0\.15\.3\.js/)
 }
 
 function testBunCompatibleModuleLoader () {
@@ -307,7 +317,11 @@ function testMermaidStaticRuntime () {
   assert.match(mermaid, /version:"11\.15\.0"/)
   assert.match(mermaid, /globalThis\["mermaid"\]/)
 
+  const mermaidPlugin = read('app', 'pages', 'mermaid.js')
+  assert.doesNotMatch(mermaidPlugin, /mermaid\.parse/)
+
   const page = read('app', 'pages', 'index.jsx')
+  assert.match(page, /const mermaid = window\.mermaid/)
   assert.match(page, /typeof mermaid\.run === 'function'/)
   assert.match(page, /mermaid\.run\({ nodes: mermaidNodes }\)/)
   assert.match(page, /mermaid\.init\(undefined, mermaidNodes\)/)

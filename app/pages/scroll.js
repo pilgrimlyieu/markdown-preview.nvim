@@ -1,15 +1,19 @@
 function scroll (offsetTop) {
-  [document.body, document.documentElement].forEach((ele) => {
-    // eslint-disable-next-line
-    TweenLite.to(
-      ele,
-      0.4,
-      {
-        scrollTop: offsetTop,
-        ease: Power2.easeOut // eslint-disable-line
-      }
-    )
-  })
+  if (typeof window.scrollTo === 'function') {
+    try {
+      window.scrollTo({
+        top: offsetTop,
+        behavior: 'smooth'
+      })
+      return
+    } catch (e) {
+    }
+  }
+
+  const scrollingElement = document.scrollingElement || document.documentElement || document.body
+  if (scrollingElement) {
+    scrollingElement.scrollTop = offsetTop
+  }
 }
 
 function getAttrTag (line) {

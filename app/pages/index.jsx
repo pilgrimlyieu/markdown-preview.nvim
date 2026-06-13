@@ -75,7 +75,56 @@ const DEFAULT_OPTIONS = {
   }
 }
 
+const MERMAID_SCRIPTS = ['/_static/mermaid.min.js']
+const SEQUENCE_DIAGRAM_SCRIPTS = [
+  '/_static/underscore-min.js',
+  '/_static/webfont.js',
+  '/_static/snap.svg.min.js',
+  '/_static/tweenlite.min.js',
+  '/_static/sequence-diagram-min.js'
+]
+const FLOWCHART_SCRIPTS = [
+  '/_static/raphael@2.3.0.min.js',
+  '/_static/flowchart@1.13.0.min.js'
+]
+const DOT_SCRIPTS = [
+  '/_static/viz.js',
+  '/_static/full.render.js'
+]
+const lazyScriptLoads = {}
+
 const hasElement = (selector) => document.querySelector(selector) !== null
+
+const loadLazyScript = (src) => {
+  if (lazyScriptLoads[src]) {
+    return lazyScriptLoads[src]
+  }
+
+  lazyScriptLoads[src] = new Promise((resolve, reject) => {
+    const script = document.createElement('script')
+    script.src = src
+    script.onload = resolve
+    script.onerror = () => {
+      delete lazyScriptLoads[src]
+      script.remove()
+      reject(new Error(`Failed to load ${src}`))
+    }
+    document.head.appendChild(script)
+  })
+
+  return lazyScriptLoads[src]
+}
+
+const loadLazyScripts = (sources) =>
+  sources.reduce((chain, src) => chain.then(() => loadLazyScript(src)), Promise.resolve())
+
+const renderWithLazyScripts = (sources, render) => {
+  loadLazyScripts(sources)
+    .then(render)
+    .catch((error) => {
+      console.error(error)
+    })
+}
 
 const renderMermaid = (options, theme) => {
   const mermaidNodes = document.querySelectorAll('.mermaid')
@@ -83,18 +132,21 @@ const renderMermaid = (options, theme) => {
     return
   }
 
-  try {
-    // eslint-disable-next-line
-    mermaid.initialize({ theme: (theme || 'light'), ...(options.maid || {}) })
-    // eslint-disable-next-line
-    if (typeof mermaid.run === 'function') {
-      // eslint-disable-next-line
-      mermaid.run({ nodes: mermaidNodes }).catch(() => {})
-    } else {
-      // eslint-disable-next-line
-      mermaid.init(undefined, mermaidNodes)
+  renderWithLazyScripts(MERMAID_SCRIPTS, () => {
+    const mermaid = window.mermaid
+    if (!mermaid) {
+      return
     }
-  } catch (e) { }
+    try {
+      mermaid.initialize({ theme: (theme || 'light'), ...(options.maid || {}) })
+      if (typeof mermaid.run === 'function') {
+        mermaid.run({ nodes: mermaidNodes }).catch(() => {})
+      } else {
+        mermaid.init(undefined, mermaidNodes)
+      }
+    } catch (e) {
+    }
+  })
 }
 
 const renderEnhancedBlocks = (options, theme) => {
@@ -103,13 +155,13 @@ const renderEnhancedBlocks = (options, theme) => {
     chart.render()
   }
   if (hasElement('.sequence-diagrams')) {
-    renderDiagram()
+    renderWithLazyScripts(SEQUENCE_DIAGRAM_SCRIPTS, renderDiagram)
   }
   if (hasElement('div.flowchart')) {
-    renderFlowchart()
+    renderWithLazyScripts(FLOWCHART_SCRIPTS, renderFlowchart)
   }
   if (hasElement('.dot')) {
-    renderDot()
+    renderWithLazyScripts(DOT_SCRIPTS, renderDot)
   }
 }
 
@@ -388,18 +440,8 @@ export default class PreviewPage extends React.Component {
           <link rel="stylesheet" href="/_static/highlight.css" />
           <link rel="stylesheet" href="/_static/katex@0.15.3.css" />
           <link rel="stylesheet" href="/_static/sequence-diagram-min.css" />
-          <script type="text/javascript" src="/_static/underscore-min.js"></script>
-          <script type="text/javascript" src="/_static/webfont.js"></script>
-          <script type="text/javascript" src="/_static/snap.svg.min.js"></script>
-          <script type="text/javascript" src="/_static/tweenlite.min.js"></script>
-          <script type="text/javascript" src="/_static/mermaid.min.js"></script>
-          <script type="text/javascript" src="/_static/sequence-diagram-min.js"></script>
           <script type="text/javascript" src="/_static/katex@0.15.3.js"></script>
           <script type="text/javascript" src="/_static/mhchem.min.js"></script>
-          <script type="text/javascript" src="/_static/raphael@2.3.0.min.js"></script>
-          <script type="text/javascript" src="/_static/flowchart@1.13.0.min.js"></script>
-          <script type="text/javascript" src="/_static/viz.js"></script>
-          <script type="text/javascript" src="/_static/full.render.js"></script>
         </Head>
         <main data-theme={this.state.theme}>
           <div id="page-ctn" contentEditable={contentEditable ? 'true' : 'false'}>
