@@ -12,7 +12,7 @@ export default function load(scriptPath) {
 
   const moduleCode = fs.readFileSync(userModule.filename, 'utf-8')
 
-  userModule.require = userModule.require.bind(userModule)
+  userModule.require = Module.createRequire(userModule.filename)
 
   const sanbox = vm.createContext({
     ...global,

@@ -41,6 +41,9 @@ function! mkdp#rpc#start_server() abort
   let l:mkdp_server_script = s:mkdp_root_dir . '/app/bin/markdown-preview-' . mkdp#util#get_platform()
   if executable(l:mkdp_server_script)
     let l:cmd = [l:mkdp_server_script, '--path', s:mkdp_root_dir . '/app/server.js']
+  elseif executable('bun')
+    let l:mkdp_server_script = s:mkdp_root_dir . '/app/index.js'
+    let l:cmd = ['bun', l:mkdp_server_script, '--path', s:mkdp_root_dir . '/app/server.js']
   elseif executable('node')
     let l:mkdp_server_script = s:mkdp_root_dir . '/app/index.js'
     let l:cmd = ['node', l:mkdp_server_script, '--path', s:mkdp_root_dir . '/app/server.js']
@@ -58,7 +61,7 @@ function! mkdp#rpc#start_server() abort
       let s:mkdp_channel_id = jobstart(l:cmd, l:nvim_optons)
     endif
   else
-    call mkdp#util#echo_messages('Error', 'Pre build and node is not found')
+    call mkdp#util#echo_messages('Error', 'Pre build, bun, and node are not found')
   endif
 endfunction
 
