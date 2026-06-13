@@ -289,8 +289,15 @@ export default class PreviewPage extends React.Component {
           try {
             // eslint-disable-next-line
             mermaid.initialize({ theme: (this.state.theme || 'light'), ...(options.maid || {}) })
+            const mermaidNodes = document.querySelectorAll('.mermaid')
             // eslint-disable-next-line
-            mermaid.init(undefined, document.querySelectorAll('.mermaid'))
+            if (typeof mermaid.run === 'function') {
+              // eslint-disable-next-line
+              mermaid.run({ nodes: mermaidNodes }).catch(() => {})
+            } else {
+              // eslint-disable-next-line
+              mermaid.init(undefined, mermaidNodes)
+            }
           } catch (e) { }
 
           chart.render()
