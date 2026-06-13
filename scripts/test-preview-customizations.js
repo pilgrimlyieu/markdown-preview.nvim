@@ -40,10 +40,8 @@ function testAdmonitionRendering () {
 function testScrollSource () {
   const scrollSource = read('app', 'pages', 'scroll.js')
 
-  assert.match(scrollSource, /function getDocumentOffsetTop/)
-  assert.match(scrollSource, /getBoundingClientRect\(\)\.top \+ scrollTop/)
-  assert.match(scrollSource, /distance > 0/)
   assert.doesNotMatch(scrollSource, /\.offsetTop\b/)
+  assert.doesNotMatch(scrollSource, /querySelector\(`/)
   assert.doesNotMatch(scrollSource, /TweenLite|Power2/)
 }
 
@@ -54,6 +52,7 @@ function testScrollRuntimeUsesDocumentOffset () {
   const scrollCalls = []
   const lineElement = {
     offsetTop: 0,
+    getAttribute: () => '12',
     getBoundingClientRect: () => ({ top: 900 })
   }
 
@@ -72,9 +71,7 @@ function testScrollRuntimeUsesDocumentOffset () {
         clientHeight: 600,
         scrollHeight: 2400
       },
-      querySelector: (selector) => (
-        selector === '[data-source-line="12"]' ? lineElement : null
-      )
+      querySelectorAll: () => [lineElement]
     }
   }
 
@@ -94,20 +91,25 @@ function testScrollRuntimeInterpolatesIndentedAdmonitionBody () {
     .replace('export default', 'module.exports =')
 
   const scrollCalls = []
-  const anchors = {
-    '[data-source-line="35"]': {
-      offsetTop: 0,
+  const anchors = [
+    {
+      getAttribute: () => '35',
       getBoundingClientRect: () => ({ top: 900 })
     },
-    '[data-source-line="37"]': {
-      offsetTop: 0,
+    {
+      getAttribute: () => '37',
       getBoundingClientRect: () => ({ top: 1100 })
     }
-  }
+  ]
 
   const context = {
     module: { exports: {} },
-    window: { pageYOffset: 300 },
+    window: {
+      pageYOffset: 300,
+      scrollTo: (options) => {
+        scrollCalls.push(options)
+      }
+    },
     document: {
       body: { scrollTop: 300 },
       documentElement: {
@@ -115,14 +117,8 @@ function testScrollRuntimeInterpolatesIndentedAdmonitionBody () {
         clientHeight: 600,
         scrollHeight: 2400
       },
-      querySelector: (selector) => anchors[selector] || null
-    },
-    TweenLite: {
-      to: (_element, _duration, options) => {
-        scrollCalls.push(options.scrollTop)
-      }
-    },
-    Power2: { easeOut: 'easeOut' }
+      querySelectorAll: () => anchors
+    }
   }
 
   vm.runInNewContext(source, context)
@@ -131,9 +127,72 @@ function testScrollRuntimeInterpolatesIndentedAdmonitionBody () {
     len: 1258
   })
 
-  assert.deepStrictEqual(scrollCalls, [1000, 1000])
+  assert.deepStrictEqual(scrollCalls, [{ top: 1000, behavior: 'smooth' }])
 }
 
+function testScrollRuntimeCachesSourceLineAnchors () {
+  const source = read('app', 'pages', 'scroll.js')
+    .replace('export default', 'module.exports =')
+
+  let queryCount = 0
+  const scrollCalls = []
+  const anchors = [
+    {
+      getAttribute: () => '10',
+      getBoundingClientRect: () => ({ top: 100 })
+    },
+    {
+      getAttribute: () => '20',
+      getBoundingClientRect: () => ({ top: 300 })
+    }
+  ]
+
+  const context = {
+    module: { exports: {} },
+    window: {
+      pageYOffset: 0,
+      scrollTo: (options) => {
+        scrollCalls.push(options)
+      }
+    },
+    document: {
+      body: { scrollTop: 0 },
+      documentElement: {
+        scrollTop: 0,
+        clientHeight: 100,
+        scrollHeight: 1000
+      },
+      querySelectorAll: () => {
+        queryCount += 1
+        return anchors
+      }
+    }
+  }
+
+  vm.runInNewContext(source, context)
+  context.module.exports.middle({
+    cursor: 16,
+    len: 100
+  })
+  context.module.exports.middle({
+    cursor: 16,
+    len: 100
+  })
+
+  assert.strictEqual(queryCount, 1)
+  assert.deepStrictEqual(scrollCalls, [
+    { top: 150, behavior: 'smooth' },
+    { top: 150, behavior: 'smooth' }
+  ])
+
+  context.module.exports.invalidate()
+  context.module.exports.middle({
+    cursor: 16,
+    len: 100
+  })
+
+  assert.strictEqual(queryCount, 2)
+}
 function testBuiltPreviewBundle () {
   const html = read('app', 'out', 'index.html')
   assert.match(html, /\/_static\/admonition\.css/)
@@ -255,6 +314,7 @@ function testCursorSyncUsesLightweightEvent () {
   assert.match(page, /socket\.on\('sync_scroll', this\.onSyncScroll\.bind\(this\)\)/)
   assert.match(page, /onSyncScroll\(\{/)
   assert.match(page, /scrollToLine\[syncScrollType\] \|\| scrollToLine\.middle/)
+  assert.match(page, /scrollToLine\.invalidate\(\)/)
   assert.match(page, /const refreshScroll = \(\) => this\.onSyncScroll/)
 }
 
@@ -368,6 +428,7 @@ testAdmonitionRendering()
 testScrollSource()
 testScrollRuntimeUsesDocumentOffset()
 testScrollRuntimeInterpolatesIndentedAdmonitionBody()
+testScrollRuntimeCachesSourceLineAnchors()
 testBuiltPreviewBundle()
 testRuntimeSelection()
 testMultiPortSupport()

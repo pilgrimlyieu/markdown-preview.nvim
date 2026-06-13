@@ -16,70 +16,103 @@ function scroll (offsetTop) {
   }
 }
 
-function getAttrTag (line) {
-  return `[data-source-line="${line}"]`
-}
+let sourceLineAnchors = null
 
 function getDocumentOffsetTop (ele) {
   const scrollTop = window.pageYOffset || document.documentElement.scrollTop || document.body.scrollTop || 0
   return ele.getBoundingClientRect().top + scrollTop
 }
 
-function getPreLineOffsetTop (line) {
-  let currentLine = line - 1
-  let ele = null
-  while (currentLine > 0 && !ele) {
-    ele = document.querySelector(getAttrTag(currentLine))
-    if (!ele) {
-      currentLine -= 1
+function getSourceLineAnchors () {
+  if (!sourceLineAnchors) {
+    sourceLineAnchors = Array.prototype.slice.call(
+      document.querySelectorAll('[data-source-line]')
+    )
+      .map((element) => ({
+        element,
+        line: Number(element.getAttribute('data-source-line'))
+      }))
+      .filter((anchor) => Number.isFinite(anchor.line))
+      .sort((a, b) => a.line - b.line)
+  }
+  return sourceLineAnchors
+}
+
+function findSourceLineBounds (line) {
+  const anchors = getSourceLineAnchors()
+  let low = 0
+  let high = anchors.length - 1
+  let previous = null
+  let next = null
+
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2)
+    const anchor = anchors[mid]
+    if (anchor.line === line) {
+      return {
+        previous: anchor,
+        next: anchor
+      }
+    }
+    if (anchor.line < line) {
+      previous = anchor
+      low = mid + 1
+    } else {
+      next = anchor
+      high = mid - 1
     }
   }
-  return [
-    currentLine >= 0 ? currentLine : 0,
-    ele ? getDocumentOffsetTop(ele) : 0
-  ]
-}
 
-function getNextLineOffsetTop (line, len) {
-  let currentLine = line + 1
-  let ele = null
-  while (currentLine < len && !ele) {
-    ele = document.querySelector(getAttrTag(currentLine))
-    if (!ele) {
-      currentLine += 1
-    }
-  }
-  return [
-    currentLine < len ? currentLine : len - 1,
-    ele ? getDocumentOffsetTop(ele) : document.documentElement.scrollHeight
-  ]
-}
-
-function topOrBottom (line, len) {
-  if (line === 0) {
-    scroll(0)
-  } else if (line === len - 1) {
-    scroll(document.documentElement.scrollHeight)
+  return {
+    previous,
+    next
   }
 }
 
-function relativeScroll (line, ratio, len) {
-  let offsetTop = 0
-  const lineEle = document.querySelector(`[data-source-line="${line}"]`)
-  if (lineEle) {
-    offsetTop = getDocumentOffsetTop(lineEle)
-  } else {
-    const pre = getPreLineOffsetTop(line)
-    const next = getNextLineOffsetTop(line, len)
-    const distance = next[0] - pre[0]
-    offsetTop = distance > 0
-      ? pre[1] + ((next[1] - pre[1]) * (line - pre[0]) / distance)
-      : pre[1]
+function clampLine (line, len) {
+  return Math.max(0, Math.min(line, len - 1))
+}
+
+function isDocumentEdge (line, len) {
+  return line === 0 || line === len - 1
+}
+
+function scrollDocumentEdge (line) {
+  scroll(line === 0 ? 0 : document.documentElement.scrollHeight)
+}
+
+function getLineOffsetTop (line, len) {
+  const bounds = findSourceLineBounds(line)
+  if (bounds.previous && bounds.previous === bounds.next) {
+    return getDocumentOffsetTop(bounds.previous.element)
   }
+
+  const previousLine = bounds.previous ? bounds.previous.line : 0
+  const previousTop = bounds.previous ? getDocumentOffsetTop(bounds.previous.element) : 0
+  const nextLine = bounds.next ? bounds.next.line : len - 1
+  const nextTop = bounds.next ? getDocumentOffsetTop(bounds.next.element) : document.documentElement.scrollHeight
+  const distance = nextLine - previousLine
+
+  return distance > 0
+    ? previousTop + ((nextTop - previousTop) * (line - previousLine) / distance)
+    : previousTop
+}
+
+function scrollRelativeLine (line, ratio, len) {
+  const offsetTop = getLineOffsetTop(line, len)
   scroll(offsetTop - document.documentElement.clientHeight * ratio)
 }
 
-export default {
+function scrollLine (line, ratio, len) {
+  const clampedLine = clampLine(line, len)
+  if (isDocumentEdge(clampedLine, len)) {
+    scrollDocumentEdge(clampedLine)
+  } else {
+    scrollRelativeLine(clampedLine, ratio, len)
+  }
+}
+
+const scrollToLine = {
   relative: function ({
     cursor,
     winline,
@@ -88,11 +121,7 @@ export default {
   }) {
     const line = cursor - 1
     const ratio = winline / winheight
-    if (line === 0 || line === len - 1) {
-      topOrBottom(line, len)
-    } else {
-      relativeScroll(line, ratio, len)
-    }
+    scrollLine(line, ratio, len)
   },
   middle: function ({
     cursor,
@@ -101,11 +130,7 @@ export default {
     len
   }) {
     const line = cursor - 1
-    if (line === 0 || line === len - 1) {
-      topOrBottom(line, len)
-    } else {
-      relativeScroll(line, 0.5, len)
-    }
+    scrollLine(line, 0.5, len)
   },
   top: function ({
     cursor,
@@ -113,12 +138,16 @@ export default {
     // winheight,
     len
   }) {
-    let line = cursor - 1
-    if (line === 0 || line === len - 1) {
-      topOrBottom(line, len)
+    const line = cursor - 1
+    if (isDocumentEdge(line, len)) {
+      scrollDocumentEdge(line)
     } else {
-      line = cursor - winline
-      relativeScroll(line, 0, len)
+      scrollLine(cursor - winline, 0, len)
     }
+  },
+  invalidate: function () {
+    sourceLineAnchors = null
   }
 }
+
+export default scrollToLine

@@ -396,6 +396,7 @@ export default class PreviewPage extends React.Component {
         disableFilename: options.disable_filename
       }, () => {
         if (refreshContent) {
+          scrollToLine.invalidate()
           renderEnhancedBlocks(options, this.state.theme)
         }
         refreshScroll()
