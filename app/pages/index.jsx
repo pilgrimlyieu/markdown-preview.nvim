@@ -12,7 +12,7 @@ import markdownDeflist from 'markdown-it-deflist'
 import markdownAdmonition from 'markdown-it-admon'
 
 import mk from './katex'
-import chart from './chart'
+import { chartPlugin } from './chart'
 import mkitMermaid from './mermaid'
 import linenumbers from './linenumbers'
 import image from './image'
@@ -126,6 +126,14 @@ const renderWithLazyScripts = (sources, render) => {
     })
 }
 
+const renderChart = () => {
+  import('./chart-renderer')
+    .then((module) => module.default())
+    .catch((error) => {
+      console.error(error)
+    })
+}
+
 const renderMermaid = (options, theme) => {
   const mermaidNodes = document.querySelectorAll('.mermaid')
   if (!mermaidNodes.length) {
@@ -152,7 +160,7 @@ const renderMermaid = (options, theme) => {
 const renderEnhancedBlocks = (options, theme) => {
   renderMermaid(options, theme)
   if (hasElement('.chartjs')) {
-    chart.render()
+    renderChart()
   }
   if (hasElement('.sequence-diagrams')) {
     renderWithLazyScripts(SEQUENCE_DIAGRAM_SCRIPTS, renderDiagram)
@@ -333,7 +341,7 @@ export default class PreviewPage extends React.Component {
         .use(markdownAdmonition)
         .use(linenumbers)
         .use(mkitMermaid)
-        .use(chart.chartPlugin)
+        .use(chartPlugin)
         .use(diagram, {
           ...sequenceDiagrams
         })

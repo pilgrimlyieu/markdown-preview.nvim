@@ -11,6 +11,31 @@ const markdownAdmonition = require('markdown-it-admon')
 const root = path.resolve(__dirname, '..')
 const read = (...parts) => fs.readFileSync(path.join(root, ...parts), 'utf8')
 
+function builtJsFiles () {
+  const staticRoot = path.join(root, 'app', 'out', '_next', 'static')
+  const files = []
+
+  function walk (dir) {
+    fs.readdirSync(dir, { withFileTypes: true }).forEach((entry) => {
+      const file = path.join(dir, entry.name)
+      if (entry.isDirectory()) {
+        walk(file)
+      } else if (file.endsWith('.js')) {
+        files.push(file)
+      }
+    })
+  }
+
+  walk(staticRoot)
+  return files
+}
+
+function builtPageBundlePath () {
+  return builtJsFiles().find((candidate) =>
+    candidate.endsWith(path.join('pages', 'index.js'))
+  )
+}
+
 function testAdmonitionRendering () {
   const md = new MarkdownIt({ html: true }).use(markdownAdmonition)
 
@@ -35,6 +60,60 @@ function testAdmonitionRendering () {
   assert.match(emptyTitle, /<div class="admonition warning">/)
   assert.doesNotMatch(emptyTitle, /admonition-title/)
   assert.doesNotMatch(emptyTitle, /&quot;&quot;|""/)
+}
+
+function testChartFenceRendering () {
+  const source = read('app', 'pages', 'chart.js')
+    .replace(
+      /export\s+\{\s*chartPlugin\s*\}\s*export default\s+\{\s*chartPlugin\s*\}/s,
+      'module.exports = { chartPlugin }'
+    )
+  const context = { module: { exports: {} } }
+  vm.runInNewContext(source, context)
+
+  const md = new MarkdownIt().use(context.module.exports.chartPlugin)
+  const rendered = md.render([
+    '```chart',
+    '{"type":"bar","data":{"labels":["A"],"datasets":[{"data":[1]}]}}',
+    '```',
+    ''
+  ].join('\n'))
+
+  assert.match(rendered, /<canvas class="chartjs">/)
+  assert.match(rendered, /"type":"bar"/)
+}
+
+function testRenderErrorUsesTextContent () {
+  const source = read('app', 'pages', 'utils.js')
+    .replace('export const escape', 'const escape')
+    .replace('export const replaceWithRenderError', 'const replaceWithRenderError') +
+    '\nmodule.exports = { replaceWithRenderError }\n'
+
+  const created = []
+  const replaced = []
+  const context = {
+    module: { exports: {} },
+    document: {
+      createElement: (tag) => {
+        const element = { tag, textContent: '' }
+        created.push(element)
+        return element
+      }
+    }
+  }
+  const element = {
+    replaceWith: (replacement) => {
+      replaced.push(replacement)
+    }
+  }
+
+  vm.runInNewContext(source, context)
+  context.module.exports.replaceWithRenderError(element, 'Chart.js', '<img src=x>')
+
+  assert.strictEqual(created.length, 1)
+  assert.strictEqual(created[0].tag, 'pre')
+  assert.strictEqual(created[0].textContent, 'Chart.js complains: "<img src=x>"')
+  assert.strictEqual(replaced[0], created[0])
 }
 
 function testScrollSource () {
@@ -197,19 +276,14 @@ function testBuiltPreviewBundle () {
   const html = read('app', 'out', 'index.html')
   assert.match(html, /\/_static\/admonition\.css/)
 
-  const staticRoot = path.join(root, 'app', 'out', '_next', 'static')
-  const pageBundle = fs
-    .readdirSync(staticRoot, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => path.join(staticRoot, entry.name, 'pages', 'index.js'))
-    .find((candidate) => fs.existsSync(candidate))
-
+  const pageBundle = builtPageBundlePath()
   assert.ok(pageBundle, 'expected built Next.js pages/index.js bundle')
 
   const bundle = fs.readFileSync(pageBundle, 'utf8')
   assert.match(bundle, /getBoundingClientRect\(\)\.top/)
   assert.match(bundle, /admonition\.css/)
   assert.doesNotMatch(bundle, /TweenLite\.to|Power2\.easeOut/)
+  assert.doesNotMatch(bundle, /Chart\.js v2\./)
 }
 
 function testRuntimeSelection () {
@@ -348,11 +422,19 @@ function testSelectivePostRenderGates () {
   assert.match(page, /const hasElement = \(selector\) => document\.querySelector\(selector\) !== null/)
   assert.match(page, /const mermaidNodes = document\.querySelectorAll\('\.mermaid'\)/)
   assert.match(page, /if \(!mermaidNodes\.length\) \{\n\s+return\n\s+\}/)
-  assert.match(page, /if \(hasElement\('\.chartjs'\)\) \{\n\s+chart\.render\(\)/)
+  assert.match(page, /if \(hasElement\('\.chartjs'\)\) \{\n\s+renderChart\(\)/)
+  assert.match(page, /import\('\.\/chart-renderer'\)/)
   assert.match(page, /renderWithLazyScripts\(MERMAID_SCRIPTS/)
   assert.match(page, /renderWithLazyScripts\(SEQUENCE_DIAGRAM_SCRIPTS, renderDiagram\)/)
   assert.match(page, /renderWithLazyScripts\(FLOWCHART_SCRIPTS, renderFlowchart\)/)
   assert.match(page, /renderWithLazyScripts\(DOT_SCRIPTS, renderDot\)/)
+
+  const chartPlugin = read('app', 'pages', 'chart.js')
+  assert.doesNotMatch(chartPlugin, /from 'chart\.js'|require\(['"]chart\.js['"]\)/)
+  assert.match(chartPlugin, /const chartPlugin = \(md\) =>/)
+
+  const chartRenderer = read('app', 'pages', 'chart-renderer.js')
+  assert.match(chartRenderer, /from 'chart\.js'/)
 
   const html = read('app', 'out', 'index.html')
   assert.doesNotMatch(html, /\/_static\/mermaid\.min\.js/)
@@ -361,6 +443,24 @@ function testSelectivePostRenderGates () {
   assert.doesNotMatch(html, /\/_static\/flowchart@1\.13\.0\.min\.js/)
   assert.doesNotMatch(html, /\/_static\/full\.render\.js/)
   assert.match(html, /\/_static\/katex@0\.15\.3\.js/)
+}
+
+function testChartRendererIsLazyChunk () {
+  const pageBundle = builtPageBundlePath()
+  assert.ok(pageBundle, 'expected built Next.js pages/index.js bundle')
+
+  const bundles = builtJsFiles().map((file) => ({
+    file,
+    source: fs.readFileSync(file, 'utf8')
+  }))
+  const page = bundles.find((bundle) => bundle.file === pageBundle)
+  const asyncChartChunk = bundles.find((bundle) =>
+    bundle.file !== pageBundle && /Chart\.js v2\./.test(bundle.source)
+  )
+
+  assert.ok(page, 'expected built page bundle')
+  assert.doesNotMatch(page.source, /Chart\.js v2\./)
+  assert.ok(asyncChartChunk, 'expected Chart.js to be emitted into a lazy chunk')
 }
 
 function testBunCompatibleModuleLoader () {
@@ -425,6 +525,8 @@ function testBuildCacheHygiene () {
 }
 
 testAdmonitionRendering()
+testChartFenceRendering()
+testRenderErrorUsesTextContent()
 testScrollSource()
 testScrollRuntimeUsesDocumentOffset()
 testScrollRuntimeInterpolatesIndentedAdmonitionBody()
@@ -435,6 +537,7 @@ testMultiPortSupport()
 testCursorSyncUsesLightweightEvent()
 testFreshRefreshSkipsFullContent()
 testSelectivePostRenderGates()
+testChartRendererIsLazyChunk()
 testBunCompatibleModuleLoader()
 testMermaidStaticRuntime()
 testBuildCacheHygiene()
