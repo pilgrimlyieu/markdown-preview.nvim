@@ -91,8 +91,10 @@ const DOT_SCRIPTS = [
   '/_static/viz.js',
   '/_static/full.render.js'
 ]
+const KATEX_STYLES = ['/_static/katex@0.15.3.css']
 const KATEX_SCRIPTS = ['/_static/katex@0.15.3.js']
 const MHCHEM_SCRIPT = '/_static/mhchem.min.js'
+const lazyStyleLoads = {}
 const lazyScriptLoads = {}
 
 const hasElement = (selector) => document.querySelector(selector) !== null
@@ -100,6 +102,27 @@ const hasElement = (selector) => document.querySelector(selector) !== null
 const contentUsesMath = (source) => source.indexOf('$') !== -1
 
 const contentUsesMhchem = (source) => /\\(?:ce|pu)\s*\{/.test(source)
+
+const loadLazyStyle = (href) => {
+  if (lazyStyleLoads[href]) {
+    return lazyStyleLoads[href]
+  }
+
+  lazyStyleLoads[href] = new Promise((resolve, reject) => {
+    const link = document.createElement('link')
+    link.rel = 'stylesheet'
+    link.href = href
+    link.onload = resolve
+    link.onerror = () => {
+      delete lazyStyleLoads[href]
+      link.remove()
+      reject(new Error(`Failed to load ${href}`))
+    }
+    document.head.appendChild(link)
+  })
+
+  return lazyStyleLoads[href]
+}
 
 const loadLazyScript = (src) => {
   if (lazyScriptLoads[src]) {
@@ -121,6 +144,9 @@ const loadLazyScript = (src) => {
   return lazyScriptLoads[src]
 }
 
+const loadLazyStyles = (hrefs) =>
+  hrefs.reduce((chain, href) => chain.then(() => loadLazyStyle(href)), Promise.resolve())
+
 const loadLazyScripts = (sources) =>
   sources.reduce((chain, src) => chain.then(() => loadLazyScript(src)), Promise.resolve())
 
@@ -132,7 +158,10 @@ const loadRenderDependencies = (source) => {
   const scripts = contentUsesMhchem(source)
     ? KATEX_SCRIPTS.concat(MHCHEM_SCRIPT)
     : KATEX_SCRIPTS
-  return loadLazyScripts(scripts)
+  return Promise.all([
+    loadLazyStyles(KATEX_STYLES),
+    loadLazyScripts(scripts)
+  ])
 }
 
 const renderWithLazyScripts = (sources, render) => {
@@ -490,7 +519,6 @@ export default class PreviewPage extends React.Component {
           <link rel="stylesheet" href="/_static/markdown.css" />
           <link rel="stylesheet" href="/_static/admonition.css" />
           <link rel="stylesheet" href="/_static/highlight.css" />
-          <link rel="stylesheet" href="/_static/katex@0.15.3.css" />
           <link rel="stylesheet" href="/_static/sequence-diagram-min.css" />
         </Head>
         <main data-theme={this.state.theme}>

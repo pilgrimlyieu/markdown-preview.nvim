@@ -613,6 +613,7 @@ function loadPreviewPageForTest () {
   }).code
 
   const scripts = []
+  const styles = []
   const scrollCalls = []
   const noopPlugin = () => {}
   class FakeMarkdownIt {
@@ -706,7 +707,13 @@ function loadPreviewPageForTest () {
         remove: noopPlugin
       }),
       head: {
-        appendChild: (script) => scripts.push(script)
+        appendChild: (element) => {
+          if (element.tag === 'link') {
+            styles.push(element)
+          } else {
+            scripts.push(element)
+          }
+        }
       }
     }
   }
@@ -716,6 +723,7 @@ function loadPreviewPageForTest () {
   return {
     PreviewPage: module.exports.default,
     scripts,
+    styles,
     scrollCalls
   }
 }
@@ -726,7 +734,7 @@ async function flushPromises () {
 }
 
 async function testAsyncMathRenderUsesLatestScrollPayload () {
-  const { PreviewPage, scripts, scrollCalls } = loadPreviewPageForTest()
+  const { PreviewPage, scripts, styles, scrollCalls } = loadPreviewPageForTest()
   const page = new PreviewPage({})
 
   page.onRefreshContent({
@@ -744,6 +752,8 @@ async function testAsyncMathRenderUsesLatestScrollPayload () {
   await flushPromises()
   assert.strictEqual(scripts.length, 1)
   assert.strictEqual(scripts[0].src, '/_static/katex@0.15.3.js')
+  assert.strictEqual(styles.length, 1)
+  assert.strictEqual(styles[0].href, '/_static/katex@0.15.3.css')
   assert.strictEqual(page.state.content, '')
 
   page.onSyncScroll({
@@ -756,6 +766,7 @@ async function testAsyncMathRenderUsesLatestScrollPayload () {
   })
   assert.strictEqual(scrollCalls[scrollCalls.length - 1].cursor, 36)
 
+  styles[0].onload()
   scripts[0].onload()
   await flushPromises()
 
@@ -763,10 +774,34 @@ async function testAsyncMathRenderUsesLatestScrollPayload () {
   assert.strictEqual(page.state.cursor[1], 36)
   assert.strictEqual(scrollCalls[scrollCalls.length - 1].cursor, 36)
 }
+
+async function testPlainMarkdownSkipsMathAssets () {
+  const { PreviewPage, scripts, styles } = loadPreviewPageForTest()
+  const page = new PreviewPage({})
+
+  page.onRefreshContent({
+    options: { sync_scroll_type: 'middle' },
+    isActive: true,
+    winline: 1,
+    winheight: 20,
+    cursor: [0, 1, 1, 0],
+    pageTitle: '',
+    theme: 'light',
+    name: '/tmp/plain.md',
+    content: ['# Plain', 'No math here.']
+  })
+
+  await flushPromises()
+
+  assert.strictEqual(scripts.length, 0)
+  assert.strictEqual(styles.length, 0)
+  assert.match(page.state.content, /No math here\./)
+}
+
 function testBuiltPreviewBundle () {
   const html = read('app', 'out', 'index.html')
   assert.match(html, /\/_static\/admonition\.css/)
-  assert.match(html, /\/_static\/katex@0\.15\.3\.css/)
+  assert.doesNotMatch(html, /\/_static\/katex@0\.15\.3\.css/)
   assert.doesNotMatch(html, /<script[^>]+\/_static\/katex@0\.15\.3\.js/)
   assert.doesNotMatch(html, /<script[^>]+\/_static\/mhchem\.min\.js/)
 
@@ -1111,6 +1146,7 @@ async function main () {
   testScrollRuntimeCachesSourceLineAnchors()
   testScrollRuntimeCoalescesAnimationFrame()
   await testAsyncMathRenderUsesLatestScrollPayload()
+  await testPlainMarkdownSkipsMathAssets()
   testBuiltPreviewBundle()
   testRuntimeSelection()
   testMultiPortSupport()
