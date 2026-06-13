@@ -116,6 +116,90 @@ function testRenderErrorUsesTextContent () {
   assert.strictEqual(replaced[0], created[0])
 }
 
+function testPlantumlPlaceholderRendering () {
+  const codeUmlSource = read('app', 'pages', 'plantuml.js')
+    .replace('export default', 'module.exports =')
+  const plantumlRequire = (id) =>
+    id === './plantuml-placeholder'
+      ? require(path.join(root, 'app', 'pages', 'plantuml-placeholder.js'))
+      : require(id)
+  const context = {
+    module: { exports: {} },
+    console,
+    require: plantumlRequire
+  }
+  vm.runInNewContext(codeUmlSource, context)
+
+  const blockUml = require(path.join(root, 'app', 'pages', 'blockPlantuml.js'))
+  const md = new MarkdownIt()
+    .use(blockUml)
+    .use(context.module.exports)
+
+  const block = md.render([
+    '@startuml',
+    'Alice -> Bob',
+    '@enduml',
+    ''
+  ].join('\n'))
+  const fenced = md.render([
+    '```plantuml',
+    'Bob -> Alice',
+    '```',
+    ''
+  ].join('\n'))
+
+  assert.match(block, /class="plantuml-diagram"/)
+  assert.match(block, /data-server="https:\/\/www\.plantuml\.com\/plantuml"/)
+  assert.match(block, /Alice -&gt; Bob/)
+  assert.match(fenced, /class="plantuml-diagram"/)
+  assert.match(fenced, /Bob -&gt; Alice/)
+  assert.doesNotMatch(block + fenced, /plantuml\/img\/[A-Za-z0-9_-]+/)
+}
+
+function testPlantumlRendererRuntime () {
+  const plantumlEncoder = require('plantuml-encoder')
+  const source = read('app', 'pages', 'plantuml-renderer.js')
+    .replace("import plantumlEncoder from 'plantuml-encoder'", "const plantumlEncoder = require('plantuml-encoder')")
+    .replace("import { replaceWithRenderError } from './utils'", "const replaceWithRenderError = () => { throw new Error('unexpected PlantUML render error') }")
+    .replace('export default function renderPlantumlBlocks', 'module.exports = function renderPlantumlBlocks')
+  const images = []
+  const element = {
+    textContent: 'Alice -> Bob',
+    getAttribute: (name) => ({
+      'data-image-format': 'svg',
+      'data-server': 'https://example.test/plantuml',
+      'data-alt': 'sequence'
+    })[name],
+    replaceWith: (image) => {
+      images.push(image)
+    }
+  }
+  const context = {
+    module: { exports: {} },
+    require,
+    document: {
+      querySelectorAll: (selector) => {
+        assert.strictEqual(selector, '.plantuml-diagram')
+        return [element]
+      },
+      createElement: (tag) => {
+        assert.strictEqual(tag, 'img')
+        return {}
+      }
+    }
+  }
+
+  vm.runInNewContext(source, context)
+  context.module.exports()
+
+  assert.strictEqual(images.length, 1)
+  assert.strictEqual(images[0].alt, 'sequence')
+  assert.strictEqual(
+    images[0].src,
+    `https://example.test/plantuml/svg/${plantumlEncoder.encode('Alice -> Bob')}`
+  )
+}
+
 function testHighlightLanguageSubset () {
   const page = read('app', 'pages', 'index.jsx')
   assert.match(page, /import hljs from '\.\/highlight'/)
@@ -338,9 +422,10 @@ function testBuiltPreviewBundle () {
   assert.match(bundle, /admonition\.css/)
   assert.doesNotMatch(bundle, /TweenLite\.to|Power2\.easeOut/)
   assert.doesNotMatch(bundle, /Chart\.js v2\./)
+  assert.doesNotMatch(bundle, /pako|deflate/)
   assert.doesNotMatch(bundle, /accesslog/)
   assert.ok(
-    bundleSize < 1150000,
+    bundleSize < 700000,
     `expected lean preview page bundle after optional dependency trimming, got ${bundleSize}`
   )
 }
@@ -483,6 +568,8 @@ function testSelectivePostRenderGates () {
   assert.match(page, /if \(!mermaidNodes\.length\) \{\n\s+return\n\s+\}/)
   assert.match(page, /if \(hasElement\('\.chartjs'\)\) \{\n\s+renderChart\(\)/)
   assert.match(page, /import\('\.\/chart-renderer'\)/)
+  assert.match(page, /if \(hasElement\('\.plantuml-diagram'\)\) \{\n\s+renderPlantuml\(\)/)
+  assert.match(page, /import\('\.\/plantuml-renderer'\)/)
   assert.match(page, /renderWithLazyScripts\(MERMAID_SCRIPTS/)
   assert.match(page, /renderWithLazyScripts\(SEQUENCE_DIAGRAM_SCRIPTS, renderDiagram\)/)
   assert.match(page, /renderWithLazyScripts\(FLOWCHART_SCRIPTS, renderFlowchart\)/)
@@ -494,6 +581,19 @@ function testSelectivePostRenderGates () {
 
   const chartRenderer = read('app', 'pages', 'chart-renderer.js')
   assert.match(chartRenderer, /from 'chart\.js'/)
+
+  const blockPlantuml = read('app', 'pages', 'blockPlantuml.js')
+  assert.doesNotMatch(blockPlantuml, /plantuml-encoder|pako/)
+
+  const codePlantuml = read('app', 'pages', 'plantuml.js')
+  assert.doesNotMatch(codePlantuml, /plantuml-encoder|pako/)
+
+  const plantumlPlaceholder = read('app', 'pages', 'plantuml-placeholder.js')
+  assert.doesNotMatch(plantumlPlaceholder, /plantuml-encoder|pako/)
+  assert.match(plantumlPlaceholder, /function plantumlPlaceholder/)
+
+  const plantumlRenderer = read('app', 'pages', 'plantuml-renderer.js')
+  assert.match(plantumlRenderer, /from 'plantuml-encoder'/)
 
   const html = read('app', 'out', 'index.html')
   assert.doesNotMatch(html, /\/_static\/mermaid\.min\.js/)
@@ -520,6 +620,24 @@ function testChartRendererIsLazyChunk () {
   assert.ok(page, 'expected built page bundle')
   assert.doesNotMatch(page.source, /Chart\.js v2\./)
   assert.ok(asyncChartChunk, 'expected Chart.js to be emitted into a lazy chunk')
+}
+
+function testPlantumlRendererIsLazyChunk () {
+  const pageBundle = builtPageBundlePath()
+  assert.ok(pageBundle, 'expected built Next.js pages/index.js bundle')
+
+  const bundles = builtJsFiles().map((file) => ({
+    file,
+    source: fs.readFileSync(file, 'utf8')
+  }))
+  const page = bundles.find((bundle) => bundle.file === pageBundle)
+  const asyncPlantumlChunk = bundles.find((bundle) =>
+    bundle.file !== pageBundle && /pako|deflate/.test(bundle.source)
+  )
+
+  assert.ok(page, 'expected built page bundle')
+  assert.doesNotMatch(page.source, /pako|deflate/)
+  assert.ok(asyncPlantumlChunk, 'expected PlantUML encoder to be emitted into a lazy chunk')
 }
 
 function testBunCompatibleModuleLoader () {
@@ -586,6 +704,8 @@ function testBuildCacheHygiene () {
 testAdmonitionRendering()
 testChartFenceRendering()
 testRenderErrorUsesTextContent()
+testPlantumlPlaceholderRendering()
+testPlantumlRendererRuntime()
 testHighlightLanguageSubset()
 testHighlightRuntimeSubset()
 testScrollSource()
@@ -599,6 +719,7 @@ testCursorSyncUsesLightweightEvent()
 testFreshRefreshSkipsFullContent()
 testSelectivePostRenderGates()
 testChartRendererIsLazyChunk()
+testPlantumlRendererIsLazyChunk()
 testBunCompatibleModuleLoader()
 testMermaidStaticRuntime()
 testBuildCacheHygiene()

@@ -126,13 +126,17 @@ const renderWithLazyScripts = (sources, render) => {
     })
 }
 
-const renderChart = () => {
-  import('./chart-renderer')
+const renderWithLazyModule = (loadRenderer) => {
+  loadRenderer()
     .then((module) => module.default())
     .catch((error) => {
       console.error(error)
     })
 }
+
+const renderChart = () => renderWithLazyModule(() => import('./chart-renderer'))
+
+const renderPlantuml = () => renderWithLazyModule(() => import('./plantuml-renderer'))
 
 const renderMermaid = (options, theme) => {
   const mermaidNodes = document.querySelectorAll('.mermaid')
@@ -161,6 +165,9 @@ const renderEnhancedBlocks = (options, theme) => {
   renderMermaid(options, theme)
   if (hasElement('.chartjs')) {
     renderChart()
+  }
+  if (hasElement('.plantuml-diagram')) {
+    renderPlantuml()
   }
   if (hasElement('.sequence-diagrams')) {
     renderWithLazyScripts(SEQUENCE_DIAGRAM_SCRIPTS, renderDiagram)

@@ -1,26 +1,14 @@
 // Process block-level uml diagrams
 
-const plantumlEncoder = require("plantuml-encoder");
+const { plantumlPlaceholder } = require('./plantuml-placeholder')
 
 module.exports = function umlPlugin(md, options) {
-
-  function generateSourceDefault(umlCode, pluginOptions) {
-    var imageFormat = pluginOptions.imageFormat || 'img';
-    var diagramName = pluginOptions.diagramName || 'uml';
-    var server = pluginOptions.server || 'https://www.plantuml.com/plantuml';
-    var zippedCode = plantumlEncoder.encode(umlCode);
-
-    return server + '/' + imageFormat + '/' + zippedCode;
-  }
-
   options = options || {};
 
   var openMarker = options.openMarker || '@startuml',
       openChar = openMarker.charCodeAt(0),
       closeMarker = options.closeMarker || '@enduml',
-      closeChar = closeMarker.charCodeAt(0),
-      render = options.render || md.renderer.rules.image,
-      generateSource = options.generateSource || generateSourceDefault;
+      closeChar = closeMarker.charCodeAt(0);
 
   function uml(state, startLine, endLine, silent) {
     var nextLine, markup, params, token, i,
@@ -105,22 +93,9 @@ module.exports = function umlPlugin(md, options) {
       .slice(startLine + 1, nextLine)
       .join('\n');
 
-    // We generate a token list for the alt property, to mimic what the image parser does.
-    var altToken = [];
-    // Remove leading space if any.
-    var alt = params ? params.slice(1) : 'uml diagram';
-    state.md.inline.parse(
-      alt,
-      state.md,
-      state.env,
-      altToken
-    );
-
-    token = state.push('uml_diagram', 'img', 0);
-    // alt is constructed from children. No point in populating it here.
-    token.attrs = [ [ 'src', generateSource(contents, options) ], [ 'alt', '' ] ];
+    token = state.push('uml_diagram', 'div', 0);
     token.block = true;
-    token.children = altToken;
+    token.content = contents;
     token.info = params;
     token.map = [ startLine, nextLine ];
     token.markup = markup;
@@ -133,5 +108,9 @@ module.exports = function umlPlugin(md, options) {
   md.block.ruler.before('fence', 'uml_diagram', uml, {
     alt: [ 'paragraph', 'reference', 'blockquote', 'list' ]
   });
-  md.renderer.rules.uml_diagram = render;
+  md.renderer.rules.uml_diagram = function (tokens, idx) {
+    var token = tokens[idx];
+    var alt = token.info ? token.info.slice(1) : 'uml diagram';
+    return plantumlPlaceholder(token.content, options, alt);
+  };
 };

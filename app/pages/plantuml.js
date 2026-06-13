@@ -1,13 +1,4 @@
-const plantumlEncoder = require("plantuml-encoder");
-
-function generateSourceDefault (umlCode, pluginOptions) {
-  var imageFormat = pluginOptions.imageFormat || 'img'
-  var diagramName = pluginOptions.diagramName || 'uml'
-  var server = pluginOptions.server || 'https://www.plantuml.com/plantuml'
-  var zippedCode = plantumlEncoder.encode(umlCode)
-
-  return server + '/' + imageFormat + '/' + zippedCode
-}
+const { plantumlPlaceholder } = require('./plantuml-placeholder')
 
 export default (md, opts = {}) => {
   const temp = md.renderer.rules.fence.bind(md.renderer.rules)
@@ -16,7 +7,7 @@ export default (md, opts = {}) => {
     try {
       if (token.info && token.info.indexOf('plantuml') != -1 ) {
         const code = token.content.trim()
-        return `<img src="${generateSourceDefault(code, opts)}" alt="" />`
+        return plantumlPlaceholder(code, opts)
       }
     } catch (e) {
       console.error(`Parse Diagram Error: `, e)
