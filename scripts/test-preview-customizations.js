@@ -116,6 +116,28 @@ function testRenderErrorUsesTextContent () {
   assert.strictEqual(replaced[0], created[0])
 }
 
+function testKatexStaticRuntime () {
+  const staticContext = {}
+  staticContext.window = staticContext
+  staticContext.self = staticContext
+  staticContext.globalThis = staticContext
+  vm.runInNewContext(read('app', '_static', 'katex@0.15.3.js'), staticContext)
+  vm.runInNewContext(read('app', '_static', 'mhchem.min.js'), staticContext)
+
+  const source = read('app', 'pages', 'katex.js')
+    .replace('export default function math_plugin', 'module.exports = function math_plugin')
+  const context = {
+    module: { exports: {} },
+    console,
+    katex: staticContext.katex
+  }
+  vm.runInNewContext(source, context)
+
+  const md = new MarkdownIt().use(context.module.exports, { throwOnError: false })
+  assert.match(md.render('$x^2$'), /class="katex"/)
+  assert.match(md.render('$\\ce{H2O}$'), /mathvariant="normal">H/)
+}
+
 function testPlantumlPlaceholderRendering () {
   const codeUmlSource = read('app', 'pages', 'plantuml.js')
     .replace('export default', 'module.exports =')
@@ -510,9 +532,176 @@ function testScrollRuntimeCachesSourceLineAnchors () {
 
   assert.strictEqual(queryCount, 2)
 }
+
+function loadPreviewPageForTest () {
+  process.env.BROWSERSLIST_IGNORE_OLD_DATA = '1'
+
+  const babel = require('@babel/core')
+  const source = read('app', 'pages', 'index.jsx')
+  const code = babel.transformSync(source, {
+    presets: ['next/babel'],
+    babelrc: false,
+    configFile: false,
+    filename: 'index.jsx'
+  }).code
+
+  const scripts = []
+  const scrollCalls = []
+  const noopPlugin = () => {}
+  class FakeMarkdownIt {
+    use () {
+      return this
+    }
+
+    render (content) {
+      return `<p>${content}</p>`
+    }
+  }
+
+  const fakeReact = {
+    Fragment: 'Fragment',
+    createElement: () => ({}),
+    Component: class {
+      constructor () {
+        this.state = {}
+      }
+
+      setState (update, callback) {
+        const patch = typeof update === 'function' ? update(this.state) : update
+        this.state = { ...this.state, ...patch }
+        if (callback) {
+          callback()
+        }
+      }
+    }
+  }
+
+  const fakeScroll = {
+    invalidate: () => scrollCalls.push({ type: 'invalidate' }),
+    middle: (payload) => scrollCalls.push({ type: 'middle', ...payload }),
+    relative: (payload) => scrollCalls.push({ type: 'relative', ...payload }),
+    top: (payload) => scrollCalls.push({ type: 'top', ...payload })
+  }
+
+  const defaultModule = (value) => ({ __esModule: true, default: value })
+  const pluginModule = defaultModule(noopPlugin)
+  const stubModules = {
+    react: fakeReact,
+    'next/head': defaultModule(() => null),
+    'markdown-it': FakeMarkdownIt,
+    './highlight': defaultModule({ getLanguage: () => false }),
+    './chart': { chartPlugin: noopPlugin },
+    './diagram': { __esModule: true, default: noopPlugin, renderDiagram: noopPlugin },
+    './flowchart': { __esModule: true, default: noopPlugin, renderFlowchart: noopPlugin },
+    './dot': { __esModule: true, default: noopPlugin, renderDot: noopPlugin },
+    './preview-socket': defaultModule(() => ({ on: noopPlugin, close: noopPlugin })),
+    './scroll': defaultModule(fakeScroll),
+    './meta': { meta: () => noopPlugin },
+    './utils': { escape: (value) => value }
+  }
+  const requireStub = (id) => {
+    if (stubModules[id]) {
+      return stubModules[id]
+    }
+    if (id.startsWith('./') || id.startsWith('markdown-it')) {
+      return pluginModule
+    }
+    return require(id)
+  }
+
+  const module = { exports: {} }
+  const context = {
+    module,
+    exports: module.exports,
+    require: requireStub,
+    console,
+    setTimeout,
+    clearTimeout,
+    Promise,
+    window: {
+      history: { replaceState: noopPlugin },
+      location: {
+        pathname: '/page/1',
+        protocol: 'http:',
+        host: 'localhost:23720'
+      },
+      matchMedia: () => ({ matches: false }),
+      close: noopPlugin
+    },
+    document: {
+      querySelector: () => null,
+      querySelectorAll: () => [],
+      createElement: (tag) => ({
+        tag,
+        src: '',
+        onload: null,
+        onerror: null,
+        remove: noopPlugin
+      }),
+      head: {
+        appendChild: (script) => scripts.push(script)
+      }
+    }
+  }
+
+  vm.runInNewContext(code, context)
+
+  return {
+    PreviewPage: module.exports.default,
+    scripts,
+    scrollCalls
+  }
+}
+
+async function flushPromises () {
+  await Promise.resolve()
+  await Promise.resolve()
+}
+
+async function testAsyncMathRenderUsesLatestScrollPayload () {
+  const { PreviewPage, scripts, scrollCalls } = loadPreviewPageForTest()
+  const page = new PreviewPage({})
+
+  page.onRefreshContent({
+    options: { sync_scroll_type: 'middle' },
+    isActive: true,
+    winline: 1,
+    winheight: 20,
+    cursor: [0, 1, 1, 0],
+    pageTitle: '',
+    theme: 'light',
+    name: '/tmp/math.md',
+    content: ['# Math', '$x^2$']
+  })
+
+  await flushPromises()
+  assert.strictEqual(scripts.length, 1)
+  assert.strictEqual(scripts[0].src, '/_static/katex@0.15.3.js')
+  assert.strictEqual(page.state.content, '')
+
+  page.onSyncScroll({
+    options: { sync_scroll_type: 'middle' },
+    isActive: true,
+    winline: 10,
+    winheight: 20,
+    cursor: [0, 36, 1, 0],
+    len: 100
+  })
+  assert.strictEqual(scrollCalls[scrollCalls.length - 1].cursor, 36)
+
+  scripts[0].onload()
+  await flushPromises()
+
+  assert.match(page.state.content, /\$x\^2\$/)
+  assert.strictEqual(page.state.cursor[1], 36)
+  assert.strictEqual(scrollCalls[scrollCalls.length - 1].cursor, 36)
+}
 function testBuiltPreviewBundle () {
   const html = read('app', 'out', 'index.html')
   assert.match(html, /\/_static\/admonition\.css/)
+  assert.match(html, /\/_static\/katex@0\.15\.3\.css/)
+  assert.doesNotMatch(html, /<script[^>]+\/_static\/katex@0\.15\.3\.js/)
+  assert.doesNotMatch(html, /<script[^>]+\/_static\/mhchem\.min\.js/)
 
   const pageBundle = builtPageBundlePath()
   assert.ok(pageBundle, 'expected built Next.js pages/index.js bundle')
@@ -665,10 +854,11 @@ function testCursorSyncUsesLightweightEvent () {
 
   const page = read('app', 'pages', 'index.jsx')
   assert.match(page, /socket\.on\('sync_scroll', this\.onSyncScroll\.bind\(this\)\)/)
-  assert.match(page, /onSyncScroll\(\{/)
+  assert.match(page, /onSyncScroll\(scrollPayload\)/)
+  assert.match(page, /this\.latestScroll = scrollPayload/)
   assert.match(page, /scrollToLine\[syncScrollType\] \|\| scrollToLine\.middle/)
   assert.match(page, /scrollToLine\.invalidate\(\)/)
-  assert.match(page, /const refreshScroll = \(\) => this\.onSyncScroll/)
+  assert.match(page, /const refreshScroll = \(\) => this\.onSyncScroll\(this\.latestScroll \|\| scrollPayload\)/)
 }
 
 function testFreshRefreshSkipsFullContent () {
@@ -736,7 +926,8 @@ function testSelectivePostRenderGates () {
   assert.doesNotMatch(html, /\/_static\/tweenlite\.min\.js/)
   assert.doesNotMatch(html, /\/_static\/flowchart@1\.13\.0\.min\.js/)
   assert.doesNotMatch(html, /\/_static\/full\.render\.js/)
-  assert.match(html, /\/_static\/katex@0\.15\.3\.js/)
+  assert.doesNotMatch(html, /<script[^>]+\/_static\/katex@0\.15\.3\.js/)
+  assert.doesNotMatch(html, /<script[^>]+\/_static\/mhchem\.min\.js/)
 }
 
 function testChartRendererIsLazyChunk () {
@@ -836,30 +1027,39 @@ function testBuildCacheHygiene () {
   })
 }
 
-testAdmonitionRendering()
-testChartFenceRendering()
-testRenderErrorUsesTextContent()
-testPlantumlPlaceholderRendering()
-testPlantumlRendererRuntime()
-testNativePreviewSocketRuntime()
-testNativePreviewSocketIgnoresStaleEvents()
-testHighlightLanguageSubset()
-testHighlightRuntimeSubset()
-testScrollSource()
-testScrollRuntimeUsesDocumentOffset()
-testScrollRuntimeInterpolatesIndentedAdmonitionBody()
-testScrollRuntimeCachesSourceLineAnchors()
-testBuiltPreviewBundle()
-testRuntimeSelection()
-testMultiPortSupport()
-testNativePreviewTransport()
-testCursorSyncUsesLightweightEvent()
-testFreshRefreshSkipsFullContent()
-testSelectivePostRenderGates()
-testChartRendererIsLazyChunk()
-testPlantumlRendererIsLazyChunk()
-testBunCompatibleModuleLoader()
-testMermaidStaticRuntime()
-testBuildCacheHygiene()
+async function main () {
+  testAdmonitionRendering()
+  testChartFenceRendering()
+  testRenderErrorUsesTextContent()
+  testKatexStaticRuntime()
+  testPlantumlPlaceholderRendering()
+  testPlantumlRendererRuntime()
+  testNativePreviewSocketRuntime()
+  testNativePreviewSocketIgnoresStaleEvents()
+  testHighlightLanguageSubset()
+  testHighlightRuntimeSubset()
+  testScrollSource()
+  testScrollRuntimeUsesDocumentOffset()
+  testScrollRuntimeInterpolatesIndentedAdmonitionBody()
+  testScrollRuntimeCachesSourceLineAnchors()
+  await testAsyncMathRenderUsesLatestScrollPayload()
+  testBuiltPreviewBundle()
+  testRuntimeSelection()
+  testMultiPortSupport()
+  testNativePreviewTransport()
+  testCursorSyncUsesLightweightEvent()
+  testFreshRefreshSkipsFullContent()
+  testSelectivePostRenderGates()
+  testChartRendererIsLazyChunk()
+  testPlantumlRendererIsLazyChunk()
+  testBunCompatibleModuleLoader()
+  testMermaidStaticRuntime()
+  testBuildCacheHygiene()
 
-console.log('preview customization checks passed')
+  console.log('preview customization checks passed')
+}
+
+main().catch((error) => {
+  console.error(error)
+  process.exit(1)
+})

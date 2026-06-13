@@ -91,9 +91,15 @@ const DOT_SCRIPTS = [
   '/_static/viz.js',
   '/_static/full.render.js'
 ]
+const KATEX_SCRIPTS = ['/_static/katex@0.15.3.js']
+const MHCHEM_SCRIPT = '/_static/mhchem.min.js'
 const lazyScriptLoads = {}
 
 const hasElement = (selector) => document.querySelector(selector) !== null
+
+const contentUsesMath = (source) => source.indexOf('$') !== -1
+
+const contentUsesMhchem = (source) => /\\(?:ce|pu)\s*\{/.test(source)
 
 const loadLazyScript = (src) => {
   if (lazyScriptLoads[src]) {
@@ -117,6 +123,17 @@ const loadLazyScript = (src) => {
 
 const loadLazyScripts = (sources) =>
   sources.reduce((chain, src) => chain.then(() => loadLazyScript(src)), Promise.resolve())
+
+const loadRenderDependencies = (source) => {
+  if (!contentUsesMath(source)) {
+    return Promise.resolve()
+  }
+
+  const scripts = contentUsesMhchem(source)
+    ? KATEX_SCRIPTS.concat(MHCHEM_SCRIPT)
+    : KATEX_SCRIPTS
+  return loadLazyScripts(scripts)
+}
 
 const renderWithLazyScripts = (sources, render) => {
   loadLazyScripts(sources)
@@ -186,6 +203,8 @@ export default class PreviewPage extends React.Component {
 
     this.preContent = ''
     this.timer = undefined
+    this.renderVersion = 0
+    this.latestScroll = null
     this.bufnr = -1;
 
     this.state = {
@@ -222,6 +241,7 @@ export default class PreviewPage extends React.Component {
       return;
     }
     this.bufnr = bufnr;
+    this.latestScroll = null
 
     // Close the previous socket
     const tmpSocket = window.socket
@@ -272,14 +292,18 @@ export default class PreviewPage extends React.Component {
     this.startSocket(bufnr)
   }
 
-  onSyncScroll({
-    options = {},
-    isActive,
-    winline,
-    winheight,
-    cursor,
-    len
-  }) {
+  onSyncScroll(scrollPayload) {
+    this.latestScroll = scrollPayload
+
+    const {
+      options = {},
+      isActive,
+      winline,
+      winheight,
+      cursor,
+      len
+    } = scrollPayload
+
     if (isActive && !options.disable_sync_scroll) {
       const syncScrollType = options.sync_scroll_type || 'middle'
       const syncScroll = scrollToLine[syncScrollType] || scrollToLine.middle
@@ -377,30 +401,31 @@ export default class PreviewPage extends React.Component {
     }
 
     const newContent = content.join('\n')
+    const isInitialContent = this.preContent === ''
     const refreshContent = this.preContent !== newContent
     this.preContent = newContent
 
-    const refreshScroll = () => this.onSyncScroll({
+    const scrollPayload = {
       options,
       isActive,
       winline,
       winheight,
       cursor,
       len: content.length
-    })
+    }
+    this.latestScroll = scrollPayload
 
-    const refreshRender = () => {
+    const refreshScroll = () => this.onSyncScroll(this.latestScroll || scrollPayload)
+
+    const applyRender = (renderedContent) => {
+      const latestScroll = this.latestScroll || scrollPayload
       this.setState({
-        cursor,
+        cursor: latestScroll.cursor,
         name: ((name) => {
           let tokens = name.split(/\\|\//).pop().split('.');
           return tokens.length > 1 ? tokens.slice(0, -1).join('.') : tokens[0];
         })(name),
-        ...(
-          refreshContent
-          ? { content: this.md.render(newContent) }
-          : {}
-        ),
+        content: renderedContent,
         pageTitle,
         theme,
         contentEditable: options.content_editable,
@@ -414,12 +439,27 @@ export default class PreviewPage extends React.Component {
       })
     }
 
-    if (!this.preContent) {
-      refreshRender()
-      return
-    }
     if (!refreshContent) {
       refreshScroll()
+      return
+    }
+
+    const refreshRender = () => {
+      const renderVersion = ++this.renderVersion
+      loadRenderDependencies(newContent)
+        .then(() => {
+          if (renderVersion !== this.renderVersion) {
+            return
+          }
+          applyRender(this.md.render(newContent))
+        })
+        .catch((error) => {
+          console.error(error)
+        })
+    }
+
+    if (isInitialContent) {
+      refreshRender()
       return
     }
     if (this.timer) {
@@ -452,8 +492,6 @@ export default class PreviewPage extends React.Component {
           <link rel="stylesheet" href="/_static/highlight.css" />
           <link rel="stylesheet" href="/_static/katex@0.15.3.css" />
           <link rel="stylesheet" href="/_static/sequence-diagram-min.css" />
-          <script type="text/javascript" src="/_static/katex@0.15.3.js"></script>
-          <script type="text/javascript" src="/_static/mhchem.min.js"></script>
         </Head>
         <main data-theme={this.state.theme}>
           <div id="page-ctn" contentEditable={contentEditable ? 'true' : 'false'}>
