@@ -17,6 +17,29 @@ function scroll (offsetTop) {
 }
 
 let sourceLineAnchors = null
+let scheduledScroll = null
+let scheduledFrame = null
+
+function runScheduledScroll () {
+  const nextScroll = scheduledScroll
+  scheduledScroll = null
+  scheduledFrame = null
+  if (nextScroll) {
+    nextScroll()
+  }
+}
+
+function scheduleScroll (callback) {
+  scheduledScroll = callback
+  if (scheduledFrame !== null) {
+    return
+  }
+  if (typeof window.requestAnimationFrame !== 'function') {
+    runScheduledScroll()
+    return
+  }
+  scheduledFrame = window.requestAnimationFrame(runScheduledScroll)
+}
 
 function getDocumentOffsetTop (ele) {
   const scrollTop = window.pageYOffset || document.documentElement.scrollTop || document.body.scrollTop || 0
@@ -121,7 +144,7 @@ const scrollToLine = {
   }) {
     const line = cursor - 1
     const ratio = winline / winheight
-    scrollLine(line, ratio, len)
+    scheduleScroll(() => scrollLine(line, ratio, len))
   },
   middle: function ({
     cursor,
@@ -130,7 +153,7 @@ const scrollToLine = {
     len
   }) {
     const line = cursor - 1
-    scrollLine(line, 0.5, len)
+    scheduleScroll(() => scrollLine(line, 0.5, len))
   },
   top: function ({
     cursor,
@@ -138,15 +161,18 @@ const scrollToLine = {
     // winheight,
     len
   }) {
-    const line = cursor - 1
-    if (isDocumentEdge(line, len)) {
-      scrollDocumentEdge(line)
-    } else {
-      scrollLine(cursor - winline, 0, len)
-    }
+    scheduleScroll(() => {
+      const line = cursor - 1
+      if (isDocumentEdge(line, len)) {
+        scrollDocumentEdge(line)
+      } else {
+        scrollLine(cursor - winline, 0, len)
+      }
+    })
   },
   invalidate: function () {
     sourceLineAnchors = null
+    scheduledScroll = null
   }
 }
 

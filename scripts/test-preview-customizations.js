@@ -382,6 +382,8 @@ function testScrollSource () {
   assert.doesNotMatch(scrollSource, /\.offsetTop\b/)
   assert.doesNotMatch(scrollSource, /querySelector\(`/)
   assert.doesNotMatch(scrollSource, /TweenLite|Power2/)
+  assert.match(scrollSource, /requestAnimationFrame/)
+  assert.match(scrollSource, /function scheduleScroll/)
 }
 
 function testScrollRuntimeUsesDocumentOffset () {
@@ -531,6 +533,71 @@ function testScrollRuntimeCachesSourceLineAnchors () {
   })
 
   assert.strictEqual(queryCount, 2)
+}
+
+function testScrollRuntimeCoalescesAnimationFrame () {
+  const source = read('app', 'pages', 'scroll.js')
+    .replace('export default', 'module.exports =')
+
+  const frames = []
+  const scrollCalls = []
+  const anchors = [
+    {
+      getAttribute: () => '10',
+      getBoundingClientRect: () => ({ top: 100 })
+    },
+    {
+      getAttribute: () => '20',
+      getBoundingClientRect: () => ({ top: 300 })
+    }
+  ]
+
+  const context = {
+    module: { exports: {} },
+    window: {
+      pageYOffset: 0,
+      requestAnimationFrame: (callback) => {
+        frames.push(callback)
+        return frames.length
+      },
+      scrollTo: (options) => {
+        scrollCalls.push(options)
+      }
+    },
+    document: {
+      body: { scrollTop: 0 },
+      documentElement: {
+        scrollTop: 0,
+        clientHeight: 100,
+        scrollHeight: 1000
+      },
+      querySelectorAll: () => anchors
+    }
+  }
+
+  vm.runInNewContext(source, context)
+  context.module.exports.middle({
+    cursor: 11,
+    len: 100
+  })
+  context.module.exports.middle({
+    cursor: 21,
+    len: 100
+  })
+
+  assert.strictEqual(frames.length, 1)
+  assert.deepStrictEqual(scrollCalls, [])
+
+  frames.shift()()
+  assert.deepStrictEqual(scrollCalls, [{ top: 250, behavior: 'smooth' }])
+
+  context.module.exports.middle({
+    cursor: 11,
+    len: 100
+  })
+  context.module.exports.invalidate()
+  frames.shift()()
+  assert.strictEqual(scrollCalls.length, 1)
 }
 
 function loadPreviewPageForTest () {
@@ -1042,6 +1109,7 @@ async function main () {
   testScrollRuntimeUsesDocumentOffset()
   testScrollRuntimeInterpolatesIndentedAdmonitionBody()
   testScrollRuntimeCachesSourceLineAnchors()
+  testScrollRuntimeCoalescesAnimationFrame()
   await testAsyncMathRenderUsesLatestScrollPayload()
   testBuiltPreviewBundle()
   testRuntimeSelection()
