@@ -3,6 +3,7 @@ const childProcess = require('child_process')
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
+const vm = require('vm')
 
 const MarkdownIt = require('markdown-it')
 const markdownAdmonition = require('markdown-it-admon')
@@ -43,6 +44,94 @@ function testScrollSource () {
   assert.match(scrollSource, /getBoundingClientRect\(\)\.top \+ scrollTop/)
   assert.match(scrollSource, /distance > 0/)
   assert.doesNotMatch(scrollSource, /\.offsetTop\b/)
+}
+
+function testScrollRuntimeUsesDocumentOffset () {
+  const source = read('app', 'pages', 'scroll.js')
+    .replace('export default', 'module.exports =')
+
+  const scrollCalls = []
+  const lineElement = {
+    offsetTop: 0,
+    getBoundingClientRect: () => ({ top: 900 })
+  }
+
+  const context = {
+    module: { exports: {} },
+    window: { pageYOffset: 300 },
+    document: {
+      body: { scrollTop: 300 },
+      documentElement: {
+        scrollTop: 300,
+        clientHeight: 600,
+        scrollHeight: 2400
+      },
+      querySelector: (selector) => (
+        selector === '[data-source-line="12"]' ? lineElement : null
+      )
+    },
+    TweenLite: {
+      to: (_element, _duration, options) => {
+        scrollCalls.push(options.scrollTop)
+      }
+    },
+    Power2: { easeOut: 'easeOut' }
+  }
+
+  vm.runInNewContext(source, context)
+  context.module.exports.relative({
+    cursor: 13,
+    winline: 5,
+    winheight: 10,
+    len: 100
+  })
+
+  assert.deepStrictEqual(scrollCalls, [900, 900])
+}
+
+function testScrollRuntimeInterpolatesIndentedAdmonitionBody () {
+  const source = read('app', 'pages', 'scroll.js')
+    .replace('export default', 'module.exports =')
+
+  const scrollCalls = []
+  const anchors = {
+    '[data-source-line="35"]': {
+      offsetTop: 0,
+      getBoundingClientRect: () => ({ top: 900 })
+    },
+    '[data-source-line="37"]': {
+      offsetTop: 0,
+      getBoundingClientRect: () => ({ top: 1100 })
+    }
+  }
+
+  const context = {
+    module: { exports: {} },
+    window: { pageYOffset: 300 },
+    document: {
+      body: { scrollTop: 300 },
+      documentElement: {
+        scrollTop: 300,
+        clientHeight: 600,
+        scrollHeight: 2400
+      },
+      querySelector: (selector) => anchors[selector] || null
+    },
+    TweenLite: {
+      to: (_element, _duration, options) => {
+        scrollCalls.push(options.scrollTop)
+      }
+    },
+    Power2: { easeOut: 'easeOut' }
+  }
+
+  vm.runInNewContext(source, context)
+  context.module.exports.middle({
+    cursor: 37,
+    len: 1258
+  })
+
+  assert.deepStrictEqual(scrollCalls, [1000, 1000])
 }
 
 function testBuiltPreviewBundle () {
@@ -132,6 +221,8 @@ function testBuildCacheHygiene () {
 
 testAdmonitionRendering()
 testScrollSource()
+testScrollRuntimeUsesDocumentOffset()
+testScrollRuntimeInterpolatesIndentedAdmonitionBody()
 testBuiltPreviewBundle()
 testRuntimeSelection()
 testBunCompatibleModuleLoader()
