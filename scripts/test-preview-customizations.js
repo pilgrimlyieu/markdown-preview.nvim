@@ -335,8 +335,13 @@ function testHighlightLanguageSubset () {
   const page = read('app', 'pages', 'index.jsx')
   const markdownRenderer = read('app', 'pages', 'markdown-renderer.js')
   assert.doesNotMatch(page, /import hljs from '\.\/highlight'/)
-  assert.match(markdownRenderer, /import hljs from '\.\/highlight'/)
+  assert.match(page, /import\('\.\/highlight'\)/)
+  assert.match(page, /contentUsesHighlighting/)
+  assert.doesNotMatch(markdownRenderer, /import hljs from '\.\/highlight'/)
   assert.doesNotMatch(page, /from 'highlight\.js'/)
+  assert.doesNotMatch(markdownRenderer, /from 'highlight\.js'/)
+  assert.match(markdownRenderer, /createMarkdownRenderer \(options = {}, highlighter = null\)/)
+  assert.match(markdownRenderer, /createHighlight\(highlighter\)/)
 
   const highlighter = read('app', 'pages', 'highlight.js')
   assert.match(highlighter, /from 'highlight\.js\/lib\/core'/)
@@ -623,18 +628,27 @@ function loadPreviewPageForTest ({ idleCallbacks = false, fakeTimers = false } =
   }).code.replace(
     /import\((['"]\.\/markdown-renderer['"])\)/g,
     'Promise.resolve(require($1))'
+  ).replace(
+    /import\((['"]\.\/highlight['"])\)/g,
+    'Promise.resolve(require($1))'
   )
 
   const scripts = []
   const styles = []
   const scrollCalls = []
   const renderCalls = []
+  const rendererHighlighters = []
   const idleQueue = new Map()
   const timerQueue = new Map()
   let idleId = 1
   let timerId = 1
+  let highlightLoadCount = 0
   const noopPlugin = () => {}
   class FakeMarkdownIt {
+    constructor (highlighter) {
+      rendererHighlighters.push(Boolean(highlighter))
+    }
+
     use () {
       return this
     }
@@ -677,16 +691,26 @@ function loadPreviewPageForTest ({ idleCallbacks = false, fakeTimers = false } =
     'next/head': defaultModule(() => null),
     './markdown-renderer': {
       __esModule: true,
-      createMarkdownRenderer: () => new FakeMarkdownIt(),
+      createMarkdownRenderer: (options, highlighter) => new FakeMarkdownIt(highlighter),
       renderDiagram: noopPlugin,
       renderFlowchart: noopPlugin,
       renderDot: noopPlugin
+    },
+    './highlight': {
+      __esModule: true,
+      default: {
+        getLanguage: () => true,
+        highlight: (lang, source) => ({ value: `highlighted:${lang}:${source}` })
+      }
     },
     './preview-socket': defaultModule(() => ({ on: noopPlugin, close: noopPlugin })),
     './scroll': defaultModule(fakeScroll)
   }
   const requireStub = (id) => {
     if (stubModules[id]) {
+      if (id === './highlight') {
+        highlightLoadCount += 1
+      }
       return stubModules[id]
     }
     if (id.startsWith('./') || id.startsWith('markdown-it')) {
@@ -772,6 +796,8 @@ function loadPreviewPageForTest ({ idleCallbacks = false, fakeTimers = false } =
     styles,
     scrollCalls,
     renderCalls,
+    rendererHighlighters,
+    highlightLoadCount: () => highlightLoadCount,
     runIdleCallbacks: () => {
       for (const [id, callback] of Array.from(idleQueue.entries())) {
         idleQueue.delete(id)
@@ -893,6 +919,7 @@ async function testEnhancedPostRenderWaitsForIdleAndCancelsStaleWork () {
   const {
     PreviewPage,
     renderCalls,
+    highlightLoadCount,
     runIdleCallbacks,
     pendingIdleCallbacks,
     runTimers,
@@ -916,6 +943,7 @@ async function testEnhancedPostRenderWaitsForIdleAndCancelsStaleWork () {
   await flushPromises()
   assert.match(page.state.content, /graph TD;/)
   assert.deepStrictEqual(renderCalls, ['    ```mermaid\n    graph TD;\n    ```'])
+  assert.strictEqual(highlightLoadCount(), 0)
   assert.strictEqual(pendingIdleCallbacks(), 1)
 
   refresh(2, 'graph LR;')
@@ -969,8 +997,61 @@ async function testEnhancedPostRenderWaitsForIdleAndCancelsStaleWork () {
   ])
 }
 
+async function testCodeHighlightLoadsOnlyForCodeFences () {
+  const {
+    PreviewPage,
+    renderCalls,
+    rendererHighlighters,
+    highlightLoadCount,
+    runIdleCallbacks,
+    pendingIdleCallbacks,
+    runTimers
+  } = loadPreviewPageForTest({ idleCallbacks: true, fakeTimers: true })
+  const page = new PreviewPage({})
+
+  page.onRefreshContent({
+    options: { sync_scroll_type: 'middle' },
+    isActive: true,
+    winline: 1,
+    winheight: 20,
+    cursor: [0, 1, 1, 0],
+    pageTitle: '',
+    theme: 'light',
+    name: '/tmp/highlight.md',
+    content: ['# Plain']
+  })
+  await flushPromises()
+  assert.deepStrictEqual(rendererHighlighters, [false])
+  assert.strictEqual(highlightLoadCount(), 0)
+
+  page.onRefreshContent({
+    options: { sync_scroll_type: 'middle' },
+    isActive: true,
+    winline: 1,
+    winheight: 20,
+    cursor: [0, 2, 1, 0],
+    pageTitle: '',
+    theme: 'light',
+    name: '/tmp/highlight.md',
+    content: ['```js', 'const answer = 42', '```']
+  })
+  runTimers()
+  await flushPromises()
+  assert.strictEqual(highlightLoadCount(), 1)
+  assert.deepStrictEqual(rendererHighlighters, [false, true])
+  assert.strictEqual(pendingIdleCallbacks(), 1)
+
+  runIdleCallbacks()
+  await flushPromises()
+  assert.match(page.state.content, /const answer = 42/)
+  assert.deepStrictEqual(renderCalls, [
+    '# Plain',
+    '```js\nconst answer = 42\n```'
+  ])
+}
+
 async function testPlainMarkdownSkipsMathAssets () {
-  const { PreviewPage, scripts, styles } = loadPreviewPageForTest()
+  const { PreviewPage, scripts, styles, highlightLoadCount } = loadPreviewPageForTest()
   const page = new PreviewPage({})
 
   page.onRefreshContent({
@@ -989,6 +1070,7 @@ async function testPlainMarkdownSkipsMathAssets () {
 
   assert.strictEqual(scripts.length, 0)
   assert.strictEqual(styles.length, 0)
+  assert.strictEqual(highlightLoadCount(), 0)
   assert.match(page.state.content, /No math here\./)
 }
 
@@ -1009,6 +1091,11 @@ function testBuiltPreviewBundle () {
     /admonition-title/.test(bundle.source) &&
     /math_inline/.test(bundle.source)
   )
+  const highlighterChunk = bundles.find((bundle) =>
+    bundle.file !== pageBundle &&
+    /highlight\.js/.test(bundle.source) &&
+    /registerLanguage/.test(bundle.source)
+  )
 
   assert.ok(page, 'expected built page bundle')
   assert.match(page.source, /getBoundingClientRect\(\)\.top/)
@@ -1020,6 +1107,8 @@ function testBuiltPreviewBundle () {
   assert.doesNotMatch(page.source, /socket\.io|engine\.io|parseqs|socket\.io-parser/)
   assert.doesNotMatch(page.source, /accesslog/)
   assert.ok(rendererChunk, 'expected markdown renderer to be emitted into a lazy chunk')
+  assert.doesNotMatch(rendererChunk.source, /highlight\.js|registerLanguage/)
+  assert.ok(highlighterChunk, 'expected syntax highlighter to be emitted into a separate lazy chunk')
   assert.ok(
     page.size < 100000,
     `expected lean preview page bundle after renderer splitting, got ${page.size}`
@@ -1563,6 +1652,7 @@ async function main () {
   testHighFrequencyLogsAreDebugOnly()
   await testFollowupRenderWaitsForIdleAndCancelsStaleWork()
   await testEnhancedPostRenderWaitsForIdleAndCancelsStaleWork()
+  await testCodeHighlightLoadsOnlyForCodeFences()
   testFreshRefreshSkipsFullContent()
   testSelectivePostRenderGates()
   testChartRendererIsLazyChunk()

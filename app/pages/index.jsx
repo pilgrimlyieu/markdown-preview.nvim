@@ -27,6 +27,16 @@ const IDLE_RENDER_TIMEOUT = 500
 const lazyStyleLoads = {}
 const lazyScriptLoads = {}
 const ENHANCED_BLOCK_RE = /^[ \t]*(?:(?:```|~~~)[ \t]*(?:mermaid|chart|sequence-diagrams|flowchart|dot|graphviz|plantuml)\b|@startuml\b|(?:gantt|sequenceDiagram|erDiagram|graph (?:TB|BT|RL|LR|TD);?)[ \t]*$)/m
+const CODE_FENCE_RE = /^[ \t]*(?:```|~~~)[ \t]*([^`\s~]*)/gm
+const ENHANCED_FENCE_LANGS = new Set([
+  'chart',
+  'dot',
+  'flowchart',
+  'graphviz',
+  'mermaid',
+  'plantuml',
+  'sequence-diagrams'
+])
 
 const hasElement = (selector) => document.querySelector(selector) !== null
 
@@ -35,6 +45,19 @@ const contentUsesMath = (source) => source.indexOf('$') !== -1
 const contentUsesMhchem = (source) => /\\(?:ce|pu)\s*\{/.test(source)
 
 const contentUsesEnhancedBlocks = (source) => ENHANCED_BLOCK_RE.test(source)
+
+const contentUsesHighlighting = (source) => {
+  CODE_FENCE_RE.lastIndex = 0
+  let match = CODE_FENCE_RE.exec(source)
+  while (match) {
+    const language = (match[1] || '').toLowerCase()
+    if (language && !ENHANCED_FENCE_LANGS.has(language)) {
+      return true
+    }
+    match = CODE_FENCE_RE.exec(source)
+  }
+  return false
+}
 
 const loadLazyStyle = (href) => {
   if (lazyStyleLoads[href]) {
@@ -180,6 +203,8 @@ export default class PreviewPage extends React.Component {
     this.renderVersion = 0
     this.latestScroll = null
     this.rendererPromise = null
+    this.highlighterPromise = null
+    this.mdUsesHighlighter = false
     this.bufnr = -1;
 
     this.state = {
@@ -206,6 +231,18 @@ export default class PreviewPage extends React.Component {
         })
     }
     return this.rendererPromise
+  }
+
+  loadHighlighter() {
+    if (!this.highlighterPromise) {
+      this.highlighterPromise = import('./highlight')
+        .then((module) => module.default)
+        .catch((error) => {
+          this.highlighterPromise = null
+          throw error
+        })
+    }
+    return this.highlighterPromise
   }
 
   cancelQueuedRender() {
@@ -394,6 +431,7 @@ export default class PreviewPage extends React.Component {
 
     const renderVersion = this.invalidatePendingRender()
     const refreshEnhancedBlocks = contentUsesEnhancedBlocks(newContent)
+    const refreshHighlightedBlocks = contentUsesHighlighting(newContent)
 
     const applyRender = (markdownRenderer, renderedContent) => {
       const latestScroll = this.latestScroll || scrollPayload
@@ -420,14 +458,17 @@ export default class PreviewPage extends React.Component {
     const refreshRender = (deferRender) => {
       Promise.all([
         this.loadMarkdownRenderer(),
-        loadRenderDependencies(newContent)
+        loadRenderDependencies(newContent),
+        refreshHighlightedBlocks ? this.loadHighlighter() : Promise.resolve(null)
       ])
-        .then(([markdownRenderer]) => {
+        .then(([markdownRenderer, , highlighter]) => {
           if (renderVersion !== this.renderVersion) {
             return
           }
-          if (!this.md) {
-            this.md = markdownRenderer.createMarkdownRenderer(options)
+          const usesHighlighter = Boolean(highlighter)
+          if (!this.md || (usesHighlighter && !this.mdUsesHighlighter)) {
+            this.md = markdownRenderer.createMarkdownRenderer(options, highlighter)
+            this.mdUsesHighlighter = usesHighlighter
           }
           const renderWork = () => {
             applyRender(markdownRenderer, this.md.render(newContent))
