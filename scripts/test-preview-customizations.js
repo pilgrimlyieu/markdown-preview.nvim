@@ -637,6 +637,7 @@ function loadPreviewPageForTest ({ idleCallbacks = false, fakeTimers = false } =
   const styles = []
   const scrollCalls = []
   const renderCalls = []
+  const highlightedRenderCalls = []
   const rendererHighlighters = []
   const idleQueue = new Map()
   const timerQueue = new Map()
@@ -646,6 +647,7 @@ function loadPreviewPageForTest ({ idleCallbacks = false, fakeTimers = false } =
   const noopPlugin = () => {}
   class FakeMarkdownIt {
     constructor (highlighter) {
+      this.usesHighlighter = Boolean(highlighter)
       rendererHighlighters.push(Boolean(highlighter))
     }
 
@@ -655,7 +657,10 @@ function loadPreviewPageForTest ({ idleCallbacks = false, fakeTimers = false } =
 
     render (content) {
       renderCalls.push(content)
-      return `<p>${content}</p>`
+      if (this.usesHighlighter) {
+        highlightedRenderCalls.push(content)
+      }
+      return `<p>${this.usesHighlighter ? 'highlighted:' : ''}${content}</p>`
     }
   }
 
@@ -796,6 +801,7 @@ function loadPreviewPageForTest ({ idleCallbacks = false, fakeTimers = false } =
     styles,
     scrollCalls,
     renderCalls,
+    highlightedRenderCalls,
     rendererHighlighters,
     highlightLoadCount: () => highlightLoadCount,
     runIdleCallbacks: () => {
@@ -1001,6 +1007,7 @@ async function testCodeHighlightLoadsOnlyForCodeFences () {
   const {
     PreviewPage,
     renderCalls,
+    highlightedRenderCalls,
     rendererHighlighters,
     highlightLoadCount,
     runIdleCallbacks,
@@ -1037,15 +1044,23 @@ async function testCodeHighlightLoadsOnlyForCodeFences () {
   })
   runTimers()
   await flushPromises()
-  assert.strictEqual(highlightLoadCount(), 1)
-  assert.deepStrictEqual(rendererHighlighters, [false, true])
+  assert.strictEqual(highlightLoadCount(), 0)
+  assert.deepStrictEqual(rendererHighlighters, [false])
   assert.strictEqual(pendingIdleCallbacks(), 1)
 
   runIdleCallbacks()
+  assert.match(page.state.content, /```js\nconst answer = 42\n```/)
+  assert.doesNotMatch(page.state.content, /highlighted:/)
+  assert.strictEqual(highlightLoadCount(), 1)
+
   await flushPromises()
   assert.match(page.state.content, /const answer = 42/)
+  assert.match(page.state.content, /highlighted:/)
+  assert.deepStrictEqual(rendererHighlighters, [false, true])
+  assert.deepStrictEqual(highlightedRenderCalls, ['```js\nconst answer = 42\n```'])
   assert.deepStrictEqual(renderCalls, [
     '# Plain',
+    '```js\nconst answer = 42\n```',
     '```js\nconst answer = 42\n```'
   ])
 }

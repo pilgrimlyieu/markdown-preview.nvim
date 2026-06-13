@@ -204,6 +204,7 @@ export default class PreviewPage extends React.Component {
     this.latestScroll = null
     this.rendererPromise = null
     this.highlighterPromise = null
+    this.highlighter = null
     this.mdUsesHighlighter = false
     this.bufnr = -1;
 
@@ -236,7 +237,10 @@ export default class PreviewPage extends React.Component {
   loadHighlighter() {
     if (!this.highlighterPromise) {
       this.highlighterPromise = import('./highlight')
-        .then((module) => module.default)
+        .then((module) => {
+          this.highlighter = module.default
+          return this.highlighter
+        })
         .catch((error) => {
           this.highlighterPromise = null
           throw error
@@ -284,6 +288,21 @@ export default class PreviewPage extends React.Component {
       }
       renderEnhancedBlocks(markdownRenderer, options, this.state.theme)
     })
+  }
+
+  upgradeCodeHighlighting(renderVersion, markdownRenderer, options, source, applyRender) {
+    this.loadHighlighter()
+      .then((highlighter) => {
+        if (renderVersion !== this.renderVersion || this.mdUsesHighlighter) {
+          return
+        }
+        this.md = markdownRenderer.createMarkdownRenderer(options, highlighter)
+        this.mdUsesHighlighter = true
+        applyRender(markdownRenderer, this.md.render(source))
+      })
+      .catch((error) => {
+        console.error(error)
+      })
   }
 
   handleThemeChange() {
@@ -452,19 +471,22 @@ export default class PreviewPage extends React.Component {
           this.schedulePostRender(renderVersion, markdownRenderer, options)
         }
         refreshScroll()
+        if (refreshHighlightedBlocks && !this.mdUsesHighlighter) {
+          this.upgradeCodeHighlighting(renderVersion, markdownRenderer, options, newContent, applyRender)
+        }
       })
     }
 
     const refreshRender = (deferRender) => {
       Promise.all([
         this.loadMarkdownRenderer(),
-        loadRenderDependencies(newContent),
-        refreshHighlightedBlocks ? this.loadHighlighter() : Promise.resolve(null)
+        loadRenderDependencies(newContent)
       ])
-        .then(([markdownRenderer, , highlighter]) => {
+        .then(([markdownRenderer]) => {
           if (renderVersion !== this.renderVersion) {
             return
           }
+          const highlighter = refreshHighlightedBlocks ? this.highlighter : null
           const usesHighlighter = Boolean(highlighter)
           if (!this.md || (usesHighlighter && !this.mdUsesHighlighter)) {
             this.md = markdownRenderer.createMarkdownRenderer(options, highlighter)
