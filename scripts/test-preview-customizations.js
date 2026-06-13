@@ -261,6 +261,17 @@ function testFreshRefreshSkipsFullContent () {
   assert.match(server, /markContentFresh\(\{ bufnr, changedtick: data\.changedtick \}\)/)
 }
 
+function testSelectivePostRenderGates () {
+  const page = read('app', 'pages', 'index.jsx')
+  assert.match(page, /const hasElement = \(selector\) => document\.querySelector\(selector\) !== null/)
+  assert.match(page, /const mermaidNodes = document\.querySelectorAll\('\.mermaid'\)/)
+  assert.match(page, /if \(!mermaidNodes\.length\) \{\n\s+return\n\s+\}/)
+  assert.match(page, /if \(hasElement\('\.chartjs'\)\) \{\n\s+chart\.render\(\)/)
+  assert.match(page, /if \(hasElement\('\.sequence-diagrams'\)\) \{\n\s+renderDiagram\(\)/)
+  assert.match(page, /if \(hasElement\('div\.flowchart'\)\) \{\n\s+renderFlowchart\(\)/)
+  assert.match(page, /if \(hasElement\('\.dot'\)\) \{\n\s+renderDot\(\)/)
+}
+
 function testBunCompatibleModuleLoader () {
   const loader = path.join(root, 'app', 'lib', 'app', 'load.js')
   assert.ok(fs.existsSync(loader), 'expected built app/lib/app/load.js')
@@ -327,6 +338,7 @@ testRuntimeSelection()
 testMultiPortSupport()
 testCursorSyncUsesLightweightEvent()
 testFreshRefreshSkipsFullContent()
+testSelectivePostRenderGates()
 testBunCompatibleModuleLoader()
 testMermaidStaticRuntime()
 testBuildCacheHygiene()

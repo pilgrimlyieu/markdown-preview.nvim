@@ -75,6 +75,44 @@ const DEFAULT_OPTIONS = {
   }
 }
 
+const hasElement = (selector) => document.querySelector(selector) !== null
+
+const renderMermaid = (options, theme) => {
+  const mermaidNodes = document.querySelectorAll('.mermaid')
+  if (!mermaidNodes.length) {
+    return
+  }
+
+  try {
+    // eslint-disable-next-line
+    mermaid.initialize({ theme: (theme || 'light'), ...(options.maid || {}) })
+    // eslint-disable-next-line
+    if (typeof mermaid.run === 'function') {
+      // eslint-disable-next-line
+      mermaid.run({ nodes: mermaidNodes }).catch(() => {})
+    } else {
+      // eslint-disable-next-line
+      mermaid.init(undefined, mermaidNodes)
+    }
+  } catch (e) { }
+}
+
+const renderEnhancedBlocks = (options, theme) => {
+  renderMermaid(options, theme)
+  if (hasElement('.chartjs')) {
+    chart.render()
+  }
+  if (hasElement('.sequence-diagrams')) {
+    renderDiagram()
+  }
+  if (hasElement('div.flowchart')) {
+    renderFlowchart()
+  }
+  if (hasElement('.dot')) {
+    renderDot()
+  }
+}
+
 export default class PreviewPage extends React.Component {
   constructor(props) {
     super(props)
@@ -306,24 +344,7 @@ export default class PreviewPage extends React.Component {
         disableFilename: options.disable_filename
       }, () => {
         if (refreshContent) {
-          try {
-            // eslint-disable-next-line
-            mermaid.initialize({ theme: (this.state.theme || 'light'), ...(options.maid || {}) })
-            const mermaidNodes = document.querySelectorAll('.mermaid')
-            // eslint-disable-next-line
-            if (typeof mermaid.run === 'function') {
-              // eslint-disable-next-line
-              mermaid.run({ nodes: mermaidNodes }).catch(() => {})
-            } else {
-              // eslint-disable-next-line
-              mermaid.init(undefined, mermaidNodes)
-            }
-          } catch (e) { }
-
-          chart.render()
-          renderDiagram()
-          renderFlowchart()
-          renderDot()
+          renderEnhancedBlocks(options, this.state.theme)
         }
         refreshScroll()
       })
