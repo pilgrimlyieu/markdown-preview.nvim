@@ -11,11 +11,16 @@ interface IBufferEvent {
   bufnr: number | string
 }
 
+interface IContentTickEvent extends IBufferEvent {
+  changedtick: number | string
+}
+
 interface IApp {
   refreshPage: ((param: IPageEvent) => void)
   closePage: ((params: IBufferEvent) => void)
   closeAllPages: (() => void)
   syncScroll: ((param: IPageEvent) => void)
+  isContentFresh: ((params: IContentTickEvent) => boolean)
   openBrowser: ((params: IBufferEvent) => void)
 }
 
@@ -33,6 +38,9 @@ export default function(options: Attach): IPlugin {
     const buffers = await nvim.buffers
     return buffers.find(buffer => buffer.id === Number(bufnr))
   }
+
+  const getChangedtick = (bufnr: number | string) =>
+    nvim.call('getbufvar', [Number(bufnr), 'changedtick'])
 
   const getScrollData = async (buffer: any) => {
     const winline = await nvim.call('winline')
@@ -69,6 +77,17 @@ export default function(options: Attach): IPlugin {
         })
         return
       }
+      const changedtick = await getChangedtick(bufnr)
+      if (app.isContentFresh({ bufnr, changedtick })) {
+        app.syncScroll({
+          bufnr,
+          data: {
+            ...scrollData,
+            len: await nvim.call('line', ['$'])
+          }
+        })
+        return
+      }
 
       const pageTitle = await nvim.getVar('mkdp_page_title')
       const theme = await nvim.getVar('mkdp_theme')
@@ -81,7 +100,8 @@ export default function(options: Attach): IPlugin {
           pageTitle,
           theme,
           name,
-          content
+          content,
+          changedtick
         }
       })
     } else if (method === 'close_page') {

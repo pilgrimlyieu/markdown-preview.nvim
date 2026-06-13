@@ -11,6 +11,7 @@ exports.run = function () {
   const routes = require('./routes')
 
   let clients = {}
+  let contentTicks = {}
   const startBufnr = Number(process.env.MKDP_START_BUFNR) || 0
 
   const openUrl = (url, browser) => {
@@ -29,6 +30,25 @@ exports.run = function () {
   const connectedClients = (bufnr) =>
     (clients[bufnr] || []).filter(client => client.connected)
 
+  const normalizeTick = (changedtick) =>
+    changedtick === undefined || changedtick === null ? '' : String(changedtick)
+
+  const contentKey = (bufnr) => String(bufnr)
+
+  const markContentFresh = ({ bufnr, changedtick }) => {
+    const tick = normalizeTick(changedtick)
+    if (tick) {
+      contentTicks[contentKey(bufnr)] = tick
+    }
+  }
+
+  const clearContentFresh = (bufnr) => {
+    delete contentTicks[contentKey(bufnr)]
+  }
+
+  const isContentFresh = ({ bufnr, changedtick }) =>
+    contentTicks[contentKey(bufnr)] === normalizeTick(changedtick)
+
   const hasConnectedClients = () =>
     Object.keys(clients).some(bufnr => connectedClients(bufnr).length > 0)
 
@@ -46,6 +66,7 @@ exports.run = function () {
   const closeClients = (bufnr) => {
     emitToClients(bufnr, 'close_page')
     delete clients[bufnr]
+    clearContentFresh(bufnr)
   }
 
   const update_clients_active_var = () => {
@@ -182,6 +203,7 @@ exports.run = function () {
         const theme = await plugin.nvim.getVar('mkdp_theme')
         const name = await buffer.name
         const content = await buffer.getLines()
+        const changedtick = await plugin.nvim.call('getbufvar', [buffer.id, 'changedtick'])
         const currentBuffer = await plugin.nvim.buffer
         client.emit('refresh_content', {
           options,
@@ -192,8 +214,10 @@ exports.run = function () {
           pageTitle,
           theme,
           name,
-          content
+          content,
+          changedtick
         })
+        markContentFresh({ bufnr, changedtick })
       }
     })
 
@@ -222,6 +246,7 @@ exports.run = function () {
     logger.info('server run: ', port)
     function refreshPage ({ bufnr, data }) {
       logger.info('refresh page: ', bufnr)
+      markContentFresh({ bufnr, changedtick: data.changedtick })
       emitToClients(bufnr, 'refresh_content', data)
     }
     function syncScroll ({ bufnr, data }) {
@@ -236,6 +261,7 @@ exports.run = function () {
       logger.info('close all pages')
       Object.keys(clients).forEach(closeClients)
       clients = {}
+      contentTicks = {}
     }
     async function openBrowser ({ bufnr }) {
       const combinePreview = await plugin.nvim.getVar('mkdp_combine_preview')
@@ -274,6 +300,7 @@ exports.run = function () {
       closePage,
       closeAllPages,
       syncScroll,
+      isContentFresh,
       openBrowser
     })
 

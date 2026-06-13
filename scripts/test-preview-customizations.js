@@ -236,6 +236,31 @@ function testCursorSyncUsesLightweightEvent () {
   assert.match(page, /const refreshScroll = \(\) => this\.onSyncScroll/)
 }
 
+function testFreshRefreshSkipsFullContent () {
+  const attach = read('src', 'attach', 'index.ts')
+  assert.match(attach, /const getChangedtick = \(bufnr/)
+  assert.match(attach, /app\.isContentFresh\(\{ bufnr, changedtick \}\)/)
+  assert.match(attach, /changedtick/)
+
+  const freshnessCheck = attach.indexOf('app.isContentFresh')
+  const fullContentRead = attach.indexOf('buffer.getLines()')
+  const cursorSyncBranch = attach.indexOf("method === 'sync_scroll'")
+  const changedtickRead = attach.indexOf('const changedtick = await getChangedtick(bufnr)')
+  assert.ok(freshnessCheck > -1, 'expected freshness check in attach bridge')
+  assert.ok(fullContentRead > -1, 'expected full content read in attach bridge')
+  assert.ok(cursorSyncBranch > -1, 'expected cursor sync branch in attach bridge')
+  assert.ok(changedtickRead > -1, 'expected changedtick read in attach bridge')
+  assert.ok(cursorSyncBranch < changedtickRead, 'expected cursor sync to avoid changedtick RPC')
+  assert.ok(freshnessCheck < fullContentRead, 'expected fresh content check before buffer.getLines()')
+
+  const server = read('app', 'server.js')
+  assert.match(server, /let contentTicks = {}/)
+  assert.match(server, /const markContentFresh = \(\{ bufnr, changedtick \}\)/)
+  assert.match(server, /const isContentFresh = \(\{ bufnr, changedtick \}\)/)
+  assert.match(server, /changedtick = await plugin\.nvim\.call\('getbufvar'/)
+  assert.match(server, /markContentFresh\(\{ bufnr, changedtick: data\.changedtick \}\)/)
+}
+
 function testBunCompatibleModuleLoader () {
   const loader = path.join(root, 'app', 'lib', 'app', 'load.js')
   assert.ok(fs.existsSync(loader), 'expected built app/lib/app/load.js')
@@ -301,6 +326,7 @@ testBuiltPreviewBundle()
 testRuntimeSelection()
 testMultiPortSupport()
 testCursorSyncUsesLightweightEvent()
+testFreshRefreshSkipsFullContent()
 testBunCompatibleModuleLoader()
 testMermaidStaticRuntime()
 testBuildCacheHygiene()
