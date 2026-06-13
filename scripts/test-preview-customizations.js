@@ -36,6 +36,14 @@ function builtPageBundlePath () {
   )
 }
 
+function builtBundles () {
+  return builtJsFiles().map((file) => ({
+    file,
+    source: fs.readFileSync(file, 'utf8'),
+    size: fs.statSync(file).size
+  }))
+}
+
 function testAdmonitionRendering () {
   const md = new MarkdownIt({ html: true }).use(markdownAdmonition)
 
@@ -325,7 +333,9 @@ function testNativePreviewSocketIgnoresStaleEvents () {
 
 function testHighlightLanguageSubset () {
   const page = read('app', 'pages', 'index.jsx')
-  assert.match(page, /import hljs from '\.\/highlight'/)
+  const markdownRenderer = read('app', 'pages', 'markdown-renderer.js')
+  assert.doesNotMatch(page, /import hljs from '\.\/highlight'/)
+  assert.match(markdownRenderer, /import hljs from '\.\/highlight'/)
   assert.doesNotMatch(page, /from 'highlight\.js'/)
 
   const highlighter = read('app', 'pages', 'highlight.js')
@@ -610,7 +620,10 @@ function loadPreviewPageForTest () {
     babelrc: false,
     configFile: false,
     filename: 'index.jsx'
-  }).code
+  }).code.replace(
+    /import\((['"]\.\/markdown-renderer['"])\)/g,
+    'Promise.resolve(require($1))'
+  )
 
   const scripts = []
   const styles = []
@@ -656,16 +669,15 @@ function loadPreviewPageForTest () {
   const stubModules = {
     react: fakeReact,
     'next/head': defaultModule(() => null),
-    'markdown-it': FakeMarkdownIt,
-    './highlight': defaultModule({ getLanguage: () => false }),
-    './chart': { chartPlugin: noopPlugin },
-    './diagram': { __esModule: true, default: noopPlugin, renderDiagram: noopPlugin },
-    './flowchart': { __esModule: true, default: noopPlugin, renderFlowchart: noopPlugin },
-    './dot': { __esModule: true, default: noopPlugin, renderDot: noopPlugin },
+    './markdown-renderer': {
+      __esModule: true,
+      createMarkdownRenderer: () => new FakeMarkdownIt(),
+      renderDiagram: noopPlugin,
+      renderFlowchart: noopPlugin,
+      renderDot: noopPlugin
+    },
     './preview-socket': defaultModule(() => ({ on: noopPlugin, close: noopPlugin })),
-    './scroll': defaultModule(fakeScroll),
-    './meta': { meta: () => noopPlugin },
-    './utils': { escape: (value) => value }
+    './scroll': defaultModule(fakeScroll)
   }
   const requireStub = (id) => {
     if (stubModules[id]) {
@@ -729,6 +741,8 @@ function loadPreviewPageForTest () {
 }
 
 async function flushPromises () {
+  await Promise.resolve()
+  await Promise.resolve()
   await Promise.resolve()
   await Promise.resolve()
 }
@@ -808,18 +822,27 @@ function testBuiltPreviewBundle () {
   const pageBundle = builtPageBundlePath()
   assert.ok(pageBundle, 'expected built Next.js pages/index.js bundle')
 
-  const bundle = fs.readFileSync(pageBundle, 'utf8')
-  const bundleSize = fs.statSync(pageBundle).size
-  assert.match(bundle, /getBoundingClientRect\(\)\.top/)
-  assert.match(bundle, /admonition\.css/)
-  assert.doesNotMatch(bundle, /TweenLite\.to|Power2\.easeOut/)
-  assert.doesNotMatch(bundle, /Chart\.js v2\./)
-  assert.doesNotMatch(bundle, /pako|deflate/)
-  assert.doesNotMatch(bundle, /socket\.io|engine\.io|parseqs|socket\.io-parser/)
-  assert.doesNotMatch(bundle, /accesslog/)
+  const bundles = builtBundles()
+  const page = bundles.find((bundle) => bundle.file === pageBundle)
+  const rendererChunk = bundles.find((bundle) =>
+    bundle.file !== pageBundle &&
+    /admonition-title/.test(bundle.source) &&
+    /math_inline/.test(bundle.source)
+  )
+
+  assert.ok(page, 'expected built page bundle')
+  assert.match(page.source, /getBoundingClientRect\(\)\.top/)
+  assert.match(page.source, /admonition\.css/)
+  assert.doesNotMatch(page.source, /admonition-title|math_inline|markdown-it-anchor|markdown-it-toc-done-right/)
+  assert.doesNotMatch(page.source, /TweenLite\.to|Power2\.easeOut/)
+  assert.doesNotMatch(page.source, /Chart\.js v2\./)
+  assert.doesNotMatch(page.source, /pako|deflate/)
+  assert.doesNotMatch(page.source, /socket\.io|engine\.io|parseqs|socket\.io-parser/)
+  assert.doesNotMatch(page.source, /accesslog/)
+  assert.ok(rendererChunk, 'expected markdown renderer to be emitted into a lazy chunk')
   assert.ok(
-    bundleSize < 700000,
-    `expected lean preview page bundle after optional dependency trimming, got ${bundleSize}`
+    page.size < 100000,
+    `expected lean preview page bundle after renderer splitting, got ${page.size}`
   )
 }
 
@@ -990,7 +1013,12 @@ function testFreshRefreshSkipsFullContent () {
 
 function testSelectivePostRenderGates () {
   const page = read('app', 'pages', 'index.jsx')
+  const markdownRenderer = read('app', 'pages', 'markdown-renderer.js')
   assert.match(page, /const hasElement = \(selector\) => document\.querySelector\(selector\) !== null/)
+  assert.match(page, /import\('\.\/markdown-renderer'\)/)
+  assert.doesNotMatch(page, /import MarkdownIt from 'markdown-it'/)
+  assert.match(markdownRenderer, /import MarkdownIt from 'markdown-it'/)
+  assert.match(markdownRenderer, /export function createMarkdownRenderer/)
   assert.match(page, /const mermaidNodes = document\.querySelectorAll\('\.mermaid'\)/)
   assert.match(page, /if \(!mermaidNodes\.length\) \{\n\s+return\n\s+\}/)
   assert.match(page, /if \(hasElement\('\.chartjs'\)\) \{\n\s+renderChart\(\)/)
@@ -998,9 +1026,9 @@ function testSelectivePostRenderGates () {
   assert.match(page, /if \(hasElement\('\.plantuml-diagram'\)\) \{\n\s+renderPlantuml\(\)/)
   assert.match(page, /import\('\.\/plantuml-renderer'\)/)
   assert.match(page, /renderWithLazyScripts\(MERMAID_SCRIPTS/)
-  assert.match(page, /renderWithLazyScripts\(SEQUENCE_DIAGRAM_SCRIPTS, renderDiagram\)/)
-  assert.match(page, /renderWithLazyScripts\(FLOWCHART_SCRIPTS, renderFlowchart\)/)
-  assert.match(page, /renderWithLazyScripts\(DOT_SCRIPTS, renderDot\)/)
+  assert.match(page, /renderWithLazyScripts\(SEQUENCE_DIAGRAM_SCRIPTS, markdownRenderer\.renderDiagram\)/)
+  assert.match(page, /renderWithLazyScripts\(FLOWCHART_SCRIPTS, markdownRenderer\.renderFlowchart\)/)
+  assert.match(page, /renderWithLazyScripts\(DOT_SCRIPTS, markdownRenderer\.renderDot\)/)
 
   const chartPlugin = read('app', 'pages', 'chart.js')
   assert.doesNotMatch(chartPlugin, /from 'chart\.js'|require\(['"]chart\.js['"]\)/)
@@ -1036,10 +1064,7 @@ function testChartRendererIsLazyChunk () {
   const pageBundle = builtPageBundlePath()
   assert.ok(pageBundle, 'expected built Next.js pages/index.js bundle')
 
-  const bundles = builtJsFiles().map((file) => ({
-    file,
-    source: fs.readFileSync(file, 'utf8')
-  }))
+  const bundles = builtBundles()
   const page = bundles.find((bundle) => bundle.file === pageBundle)
   const asyncChartChunk = bundles.find((bundle) =>
     bundle.file !== pageBundle && /Chart\.js v2\./.test(bundle.source)
@@ -1054,10 +1079,7 @@ function testPlantumlRendererIsLazyChunk () {
   const pageBundle = builtPageBundlePath()
   assert.ok(pageBundle, 'expected built Next.js pages/index.js bundle')
 
-  const bundles = builtJsFiles().map((file) => ({
-    file,
-    source: fs.readFileSync(file, 'utf8')
-  }))
+  const bundles = builtBundles()
   const page = bundles.find((bundle) => bundle.file === pageBundle)
   const asyncPlantumlChunk = bundles.find((bundle) =>
     bundle.file !== pageBundle && /pako|deflate/.test(bundle.source)
