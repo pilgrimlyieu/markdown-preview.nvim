@@ -58,6 +58,17 @@ export default function(options: Attach): IPlugin {
     }
   }
 
+  const resolveField = async (data: any, key: string, fallback: (() => Promise<any>)) =>
+    data && data[key] !== undefined ? data[key] : fallback()
+
+  const withLineCount = async (data: any) =>
+    data && data.len !== undefined
+      ? data
+      : {
+          ...data,
+          len: await nvim.call('line', ['$'])
+        }
+
   nvim.on('notification', async (method: string, args: any[]) => {
     const opts = args[0] || args
     const bufnr = opts.bufnr
@@ -73,32 +84,26 @@ export default function(options: Attach): IPlugin {
       if (!buffer) {
         return
       }
-      const scrollData = await getScrollData(buffer)
+      const scrollData = opts.data || await getScrollData(buffer)
       if (method === 'sync_scroll') {
         app.syncScroll({
           bufnr,
-          data: {
-            ...scrollData,
-            len: await nvim.call('line', ['$'])
-          }
+          data: await withLineCount(scrollData)
         })
         return
       }
-      const changedtick = await getChangedtick(bufnr)
+      const changedtick = await resolveField(scrollData, 'changedtick', () => getChangedtick(bufnr))
       if (app.isContentFresh({ bufnr, changedtick })) {
         app.syncScroll({
           bufnr,
-          data: {
-            ...scrollData,
-            len: await nvim.call('line', ['$'])
-          }
+          data: await withLineCount(scrollData)
         })
         return
       }
 
-      const pageTitle = await nvim.getVar('mkdp_page_title')
-      const theme = await nvim.getVar('mkdp_theme')
-      const name = await buffer.name
+      const pageTitle = await resolveField(scrollData, 'pageTitle', () => nvim.getVar('mkdp_page_title'))
+      const theme = await resolveField(scrollData, 'theme', () => nvim.getVar('mkdp_theme'))
+      const name = await resolveField(scrollData, 'name', () => buffer.name)
       const content = await buffer.getLines()
       app.refreshPage({
         bufnr,

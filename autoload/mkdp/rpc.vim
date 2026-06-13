@@ -91,17 +91,33 @@ function! s:clear_all_sync_scroll_timers() abort
   endfor
 endfunction
 
-function! s:sync_scroll_data(bufnr) abort
+function! s:preview_state(bufnr) abort
   return {
-        \ 'bufnr': a:bufnr,
-        \ 'data': {
         \   'options': get(g:, 'mkdp_preview_options', {}),
-        \   'isActive': 1,
+        \   'isActive': bufnr('%') ==# a:bufnr,
         \   'winline': winline(),
         \   'winheight': winheight(0),
         \   'cursor': getpos('.'),
         \   'len': line('$')
         \ }
+endfunction
+
+function! s:sync_scroll_data(bufnr) abort
+  return {
+        \ 'bufnr': a:bufnr,
+        \ 'data': s:preview_state(a:bufnr)
+        \ }
+endfunction
+
+function! s:refresh_content_data(bufnr) abort
+  let l:data = s:preview_state(a:bufnr)
+  let l:data['changedtick'] = getbufvar(a:bufnr, 'changedtick')
+  let l:data['pageTitle'] = get(g:, 'mkdp_page_title', '')
+  let l:data['theme'] = get(g:, 'mkdp_theme', '')
+  let l:data['name'] = bufname(a:bufnr)
+  return {
+        \ 'bufnr': a:bufnr,
+        \ 'data': l:data
         \ }
 endfunction
 
@@ -119,7 +135,7 @@ function! s:send_refresh(bufnr, ...) abort
   if bufnr('%') !=# a:bufnr
     return
   endif
-  call s:notify_server(a:bufnr, 'refresh_content', { 'bufnr': a:bufnr })
+  call s:notify_server(a:bufnr, 'refresh_content', s:refresh_content_data(a:bufnr))
 endfunction
 
 function! s:on_stdout(chan_id, msgs, ...) abort
