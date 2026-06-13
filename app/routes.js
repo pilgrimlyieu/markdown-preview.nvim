@@ -74,19 +74,21 @@ use((req, res, next) => {
 
 // /_static/markdown.css
 // /_static/highlight.css
-use((req, res, next) => {
+use(async (req, res, next) => {
   try {
-    if (req.mkcss && req.asPath === '/_static/markdown.css') {
-      if (fs.existsSync(req.mkcss)) {
-        return sendFile(req, res, req.mkcss)
+    if (req.asPath === '/_static/markdown.css') {
+      const mkcss = await req.plugin.nvim.getVar('mkdp_markdown_css')
+      if (mkcss && fs.existsSync(mkcss)) {
+        return sendFile(req, res, mkcss)
       }
-    } else if (req.hicss && req.asPath === '/_static/highlight.css') {
-      if (fs.existsSync(req.hicss)) {
-        return sendFile(req, res, req.hicss)
+    } else if (req.asPath === '/_static/highlight.css') {
+      const hicss = await req.plugin.nvim.getVar('mkdp_highlight_css')
+      if (hicss && fs.existsSync(hicss)) {
+        return sendFile(req, res, hicss)
       }
     }
   } catch (e) {
-    logger.error('load diy css fail: ', req.asPath, req.mkcss, req.hicss)
+    logger.error('load diy css fail: ', req.asPath)
   }
   next()
 })
@@ -98,7 +100,7 @@ use((req, res, next) => {
     if (fs.existsSync(fpath)) {
       return sendFile(req, res, fpath)
     } else {
-      logger.error('No such file:', req.asPath, req.mkcss, req.hicss)
+      logger.error('No such file:', req.asPath)
     }
   }
   next()
@@ -114,8 +116,9 @@ use(async (req, res, next) => {
     const buffer = buffers.find(b => b.id === Number(req.bufnr))
     if (buffer) {
       let fileDir = ''
-      if (req.custImgPath !== '' ){
-        fileDir = req.custImgPath
+      const customImagePath = await plugin.nvim.getVar('mkdp_images_path')
+      if (customImagePath !== '' ){
+        fileDir = customImagePath
       } else {
         fileDir = await plugin.nvim.call('expand', `#${req.bufnr}:p:h`)
       }

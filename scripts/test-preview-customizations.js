@@ -1322,6 +1322,140 @@ function testStaticAssetCacheHeaders () {
   assert.match(routes, /sendFile\(req, res, fpath\)/)
 }
 
+function testStaticRoutesAvoidNvimVarLookups () {
+  const server = read('app', 'server.js')
+  assert.doesNotMatch(server, /req\.mkcss = await plugin\.nvim\.getVar/)
+  assert.doesNotMatch(server, /req\.hicss = await plugin\.nvim\.getVar/)
+  assert.doesNotMatch(server, /req\.custImgPath = await plugin\.nvim\.getVar/)
+
+  const routes = read('app', 'routes.js')
+  const markdownCssCheck = routes.indexOf("req.asPath === '/_static/markdown.css'")
+  const markdownCssVar = routes.indexOf("getVar('mkdp_markdown_css')")
+  const highlightCssCheck = routes.indexOf("req.asPath === '/_static/highlight.css'")
+  const highlightCssVar = routes.indexOf("getVar('mkdp_highlight_css')")
+  const imageRouteCheck = routes.indexOf("reg.test(req.asPath)")
+  const imagePathVar = routes.indexOf("getVar('mkdp_images_path')")
+
+  assert.ok(markdownCssCheck > -1, 'expected markdown CSS path gate')
+  assert.ok(markdownCssVar > markdownCssCheck, 'expected markdown CSS var after path gate')
+  assert.ok(highlightCssCheck > -1, 'expected highlight CSS path gate')
+  assert.ok(highlightCssVar > highlightCssCheck, 'expected highlight CSS var after path gate')
+  assert.ok(imageRouteCheck > -1, 'expected local image path gate')
+  assert.ok(imagePathVar > imageRouteCheck, 'expected image path var inside image route')
+  assert.doesNotMatch(routes, /logger\.error\('No such file:', req\.asPath, req\.mkcss, req\.hicss\)/)
+}
+
+function testStaticRouteRuntimeAvoidsNvimVarLookups () {
+  const script = `
+    const fs = require('fs')
+    const http = require('http')
+    const path = require('path')
+
+    const root = ${JSON.stringify(root)}
+    const appDir = path.join(root, 'app')
+    const port = 31000 + (process.pid % 1000)
+    const counts = {}
+    let appApi = null
+
+    const config = {
+      mkdp_open_to_the_world: 0,
+      mkdp_port: port,
+      mkdp_port_range: 1,
+      mkdp_markdown_css: '',
+      mkdp_highlight_css: '',
+      mkdp_images_path: '',
+      mkdp_combine_preview: 0,
+      mkdp_open_ip: '',
+      mkdp_browserfunc: '',
+      mkdp_browser: '',
+      mkdp_echo_preview_url: 0
+    }
+    const fakePlugin = {
+      nvim: {
+        getVar: async (name) => {
+          counts[name] = (counts[name] || 0) + 1
+          return Object.prototype.hasOwnProperty.call(config, name) ? config[name] : ''
+        },
+        setVar: async () => {},
+        call: async () => {},
+        get buffers () {
+          return Promise.resolve([])
+        }
+      },
+      init: (api) => {
+        appApi = api
+      }
+    }
+
+    const nvimModule = path.join(appDir, 'nvim.js')
+    require.cache[nvimModule] = {
+      id: nvimModule,
+      filename: nvimModule,
+      loaded: true,
+      exports: { plugin: fakePlugin }
+    }
+
+    const walk = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const file = path.join(dir, entry.name)
+      return entry.isDirectory() ? walk(file) : [file]
+    })
+    const pageBundle = walk(path.join(appDir, 'out', '_next', 'static'))
+      .find((file) => file.endsWith(path.join('pages', 'index.js')))
+    if (!pageBundle) {
+      throw new Error('missing built page bundle')
+    }
+    const pageBundlePath = '/' + path.relative(path.join(appDir, 'out'), pageBundle).split(path.sep).join('/')
+
+    const request = (pathname) => new Promise((resolve, reject) => {
+      const req = http.get({ host: '127.0.0.1', port, path: pathname }, (res) => {
+        res.resume()
+        res.on('end', () => resolve(res.statusCode))
+      })
+      req.on('error', reject)
+      req.setTimeout(1000, () => {
+        req.destroy(new Error('request timeout'))
+      })
+    })
+    const waitForServer = async () => {
+      for (let i = 0; i < 50; i += 1) {
+        try {
+          await request('/page/1')
+          return
+        } catch (error) {
+          await new Promise((resolve) => setTimeout(resolve, 50))
+        }
+      }
+      throw new Error('server did not start')
+    }
+
+    process.chdir(appDir)
+    require(path.join(appDir, 'server.js')).run()
+
+    ;(async () => {
+      await waitForServer()
+      await request(pageBundlePath)
+      await request('/_static/page.css')
+      if (counts.mkdp_markdown_css || counts.mkdp_highlight_css || counts.mkdp_images_path) {
+        throw new Error('static requests read preview vars: ' + JSON.stringify(counts))
+      }
+      await request('/_static/markdown.css')
+      if (counts.mkdp_markdown_css !== 1 || counts.mkdp_highlight_css || counts.mkdp_images_path) {
+        throw new Error('unexpected custom CSS var reads: ' + JSON.stringify(counts))
+      }
+      process.exit(appApi ? 0 : 1)
+    })().catch((error) => {
+      console.error(error.stack || error.message)
+      console.error(JSON.stringify(counts))
+      process.exit(1)
+    })
+  `
+
+  childProcess.execFileSync(process.execPath, ['-e', script], {
+    cwd: root,
+    stdio: 'pipe'
+  })
+}
+
 async function main () {
   testAdmonitionRendering()
   testChartFenceRendering()
@@ -1356,6 +1490,8 @@ async function main () {
   testMermaidStaticRuntime()
   testBuildCacheHygiene()
   testStaticAssetCacheHeaders()
+  testStaticRoutesAvoidNvimVarLookups()
+  testStaticRouteRuntimeAvoidsNvimVarLookups()
 
   console.log('preview customization checks passed')
 }
