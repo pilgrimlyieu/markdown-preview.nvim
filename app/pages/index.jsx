@@ -23,6 +23,7 @@ const DOT_SCRIPTS = [
 const KATEX_STYLES = ['/_static/katex@0.15.3.css']
 const KATEX_SCRIPTS = ['/_static/katex@0.15.3.js']
 const MHCHEM_SCRIPT = '/_static/mhchem.min.js'
+const IDLE_RENDER_TIMEOUT = 500
 const lazyStyleLoads = {}
 const lazyScriptLoads = {}
 
@@ -93,6 +94,16 @@ const loadRenderDependencies = (source) => {
   ])
 }
 
+const scheduleIdleWork = (callback) => {
+  if (typeof window.requestIdleCallback === 'function') {
+    const id = window.requestIdleCallback(callback, { timeout: IDLE_RENDER_TIMEOUT })
+    return () => window.cancelIdleCallback && window.cancelIdleCallback(id)
+  }
+
+  const id = setTimeout(callback, 0)
+  return () => clearTimeout(id)
+}
+
 const renderWithLazyScripts = (sources, render) => {
   loadLazyScripts(sources)
     .then(render)
@@ -160,7 +171,8 @@ export default class PreviewPage extends React.Component {
     super(props)
 
     this.preContent = ''
-    this.timer = undefined
+    this.renderTimer = undefined
+    this.cancelIdleRender = null
     this.renderVersion = 0
     this.latestScroll = null
     this.rendererPromise = null
@@ -192,6 +204,33 @@ export default class PreviewPage extends React.Component {
     return this.rendererPromise
   }
 
+  cancelQueuedRender() {
+    if (this.renderTimer !== undefined) {
+      clearTimeout(this.renderTimer)
+      this.renderTimer = undefined
+    }
+    if (this.cancelIdleRender) {
+      this.cancelIdleRender()
+      this.cancelIdleRender = null
+    }
+  }
+
+  invalidatePendingRender() {
+    this.renderVersion += 1
+    this.cancelQueuedRender()
+    return this.renderVersion
+  }
+
+  scheduleIdleRender(renderVersion, renderWork) {
+    this.cancelIdleRender = scheduleIdleWork(() => {
+      this.cancelIdleRender = null
+      if (renderVersion !== this.renderVersion) {
+        return
+      }
+      renderWork()
+    })
+  }
+
   handleThemeChange() {
     this.setState((state) => ({
       theme: state.theme === 'light' ? 'dark' : 'light',
@@ -210,6 +249,7 @@ export default class PreviewPage extends React.Component {
     if (this.bufnr === bufnr) {
       return;
     }
+    this.invalidatePendingRender()
     this.bufnr = bufnr;
     this.latestScroll = null
 
@@ -254,6 +294,7 @@ export default class PreviewPage extends React.Component {
   }
 
   onClose() {
+    this.invalidatePendingRender()
     console.log('close')
     window.close()
   }
@@ -355,8 +396,9 @@ export default class PreviewPage extends React.Component {
       return
     }
 
-    const refreshRender = () => {
-      const renderVersion = ++this.renderVersion
+    const renderVersion = this.invalidatePendingRender()
+
+    const refreshRender = (deferRender) => {
       Promise.all([
         this.loadMarkdownRenderer(),
         loadRenderDependencies(newContent)
@@ -368,7 +410,14 @@ export default class PreviewPage extends React.Component {
           if (!this.md) {
             this.md = markdownRenderer.createMarkdownRenderer(options)
           }
-          applyRender(markdownRenderer, this.md.render(newContent))
+          const renderWork = () => {
+            applyRender(markdownRenderer, this.md.render(newContent))
+          }
+          if (deferRender) {
+            this.scheduleIdleRender(renderVersion, renderWork)
+          } else {
+            renderWork()
+          }
         })
         .catch((error) => {
           console.error(error)
@@ -376,14 +425,12 @@ export default class PreviewPage extends React.Component {
     }
 
     if (isInitialContent) {
-      refreshRender()
+      refreshRender(false)
       return
     }
-    if (this.timer) {
-      clearTimeout(this.timer)
-    }
-    this.timer = setTimeout(() => {
-      refreshRender()
+    this.renderTimer = setTimeout(() => {
+      this.renderTimer = undefined
+      refreshRender(true)
     }, 16);
   }
 

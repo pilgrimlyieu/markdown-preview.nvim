@@ -610,7 +610,7 @@ function testScrollRuntimeCoalescesAnimationFrame () {
   assert.strictEqual(scrollCalls.length, 1)
 }
 
-function loadPreviewPageForTest () {
+function loadPreviewPageForTest ({ idleCallbacks = false, fakeTimers = false } = {}) {
   process.env.BROWSERSLIST_IGNORE_OLD_DATA = '1'
 
   const babel = require('@babel/core')
@@ -628,6 +628,11 @@ function loadPreviewPageForTest () {
   const scripts = []
   const styles = []
   const scrollCalls = []
+  const renderCalls = []
+  const idleQueue = new Map()
+  const timerQueue = new Map()
+  let idleId = 1
+  let timerId = 1
   const noopPlugin = () => {}
   class FakeMarkdownIt {
     use () {
@@ -635,6 +640,7 @@ function loadPreviewPageForTest () {
     }
 
     render (content) {
+      renderCalls.push(content)
       return `<p>${content}</p>`
     }
   }
@@ -689,25 +695,53 @@ function loadPreviewPageForTest () {
     return require(id)
   }
 
+  const windowStub = {
+    history: { replaceState: noopPlugin },
+    location: {
+      pathname: '/page/1',
+      protocol: 'http:',
+      host: 'localhost:23720'
+    },
+    matchMedia: () => ({ matches: false }),
+    close: noopPlugin
+  }
+
+  if (idleCallbacks) {
+    windowStub.requestIdleCallback = (callback) => {
+      const id = idleId
+      idleId += 1
+      idleQueue.set(id, callback)
+      return id
+    }
+    windowStub.cancelIdleCallback = (id) => {
+      idleQueue.delete(id)
+    }
+  }
+
+  const setTimer = fakeTimers
+    ? (callback) => {
+        const id = timerId
+        timerId += 1
+        timerQueue.set(id, callback)
+        return id
+      }
+    : setTimeout
+  const clearTimer = fakeTimers
+    ? (id) => {
+        timerQueue.delete(id)
+      }
+    : clearTimeout
+
   const module = { exports: {} }
   const context = {
     module,
     exports: module.exports,
     require: requireStub,
     console,
-    setTimeout,
-    clearTimeout,
+    setTimeout: setTimer,
+    clearTimeout: clearTimer,
     Promise,
-    window: {
-      history: { replaceState: noopPlugin },
-      location: {
-        pathname: '/page/1',
-        protocol: 'http:',
-        host: 'localhost:23720'
-      },
-      matchMedia: () => ({ matches: false }),
-      close: noopPlugin
-    },
+    window: windowStub,
     document: {
       querySelector: () => null,
       querySelectorAll: () => [],
@@ -736,7 +770,22 @@ function loadPreviewPageForTest () {
     PreviewPage: module.exports.default,
     scripts,
     styles,
-    scrollCalls
+    scrollCalls,
+    renderCalls,
+    runIdleCallbacks: () => {
+      for (const [id, callback] of Array.from(idleQueue.entries())) {
+        idleQueue.delete(id)
+        callback({ didTimeout: false, timeRemaining: () => 50 })
+      }
+    },
+    pendingIdleCallbacks: () => idleQueue.size,
+    runTimers: () => {
+      for (const [id, callback] of Array.from(timerQueue.entries())) {
+        timerQueue.delete(id)
+        callback()
+      }
+    },
+    pendingTimers: () => timerQueue.size
   }
 }
 
@@ -787,6 +836,57 @@ async function testAsyncMathRenderUsesLatestScrollPayload () {
   assert.match(page.state.content, /\$x\^2\$/)
   assert.strictEqual(page.state.cursor[1], 36)
   assert.strictEqual(scrollCalls[scrollCalls.length - 1].cursor, 36)
+}
+
+async function testFollowupRenderWaitsForIdleAndCancelsStaleWork () {
+  const {
+    PreviewPage,
+    renderCalls,
+    runIdleCallbacks,
+    pendingIdleCallbacks,
+    runTimers,
+    pendingTimers
+  } = loadPreviewPageForTest({ idleCallbacks: true, fakeTimers: true })
+  const page = new PreviewPage({})
+
+  const refresh = (line, content) => page.onRefreshContent({
+    options: { sync_scroll_type: 'middle' },
+    isActive: true,
+    winline: 1,
+    winheight: 20,
+    cursor: [0, line, 1, 0],
+    pageTitle: '',
+    theme: 'light',
+    name: '/tmp/idle.md',
+    content: [content]
+  })
+
+  refresh(1, '# Initial')
+  await flushPromises()
+  assert.strictEqual(page.state.content, '<p># Initial</p>')
+  assert.deepStrictEqual(renderCalls, ['# Initial'])
+
+  refresh(2, '# Stale')
+  assert.strictEqual(pendingTimers(), 1)
+  assert.strictEqual(pendingIdleCallbacks(), 0)
+  runTimers()
+  await flushPromises()
+  assert.strictEqual(page.state.content, '<p># Initial</p>')
+  assert.strictEqual(pendingTimers(), 0)
+  assert.strictEqual(pendingIdleCallbacks(), 1)
+
+  refresh(3, '# Latest')
+  assert.strictEqual(pendingTimers(), 1)
+  assert.strictEqual(pendingIdleCallbacks(), 0)
+  runTimers()
+  await flushPromises()
+  assert.strictEqual(pendingTimers(), 0)
+  assert.strictEqual(pendingIdleCallbacks(), 1)
+
+  runIdleCallbacks()
+  await flushPromises()
+  assert.strictEqual(page.state.content, '<p># Latest</p>')
+  assert.deepStrictEqual(renderCalls, ['# Initial', '# Latest'])
 }
 
 async function testPlainMarkdownSkipsMathAssets () {
@@ -978,6 +1078,10 @@ function testCursorSyncUsesLightweightEvent () {
   assert.match(server, /emitToClients\(bufnr, 'sync_scroll', data\)/)
 
   const page = read('app', 'pages', 'index.jsx')
+  assert.match(page, /const IDLE_RENDER_TIMEOUT = 500/)
+  assert.match(page, /requestIdleCallback\(callback, \{ timeout: IDLE_RENDER_TIMEOUT \}\)/)
+  assert.match(page, /cancelIdleCallback\(id\)/)
+  assert.match(page, /scheduleIdleRender\(renderVersion, renderWork\)/)
   assert.match(page, /socket\.on\('sync_scroll', this\.onSyncScroll\.bind\(this\)\)/)
   assert.match(page, /onSyncScroll\(scrollPayload\)/)
   assert.match(page, /this\.latestScroll = scrollPayload/)
@@ -1243,6 +1347,7 @@ async function main () {
   testCursorSyncUsesLightweightEvent()
   testDebouncedContentRefresh()
   testHighFrequencyLogsAreDebugOnly()
+  await testFollowupRenderWaitsForIdleAndCancelsStaleWork()
   testFreshRefreshSkipsFullContent()
   testSelectivePostRenderGates()
   testChartRendererIsLazyChunk()
