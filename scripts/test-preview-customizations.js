@@ -154,12 +154,57 @@ function testBuiltPreviewBundle () {
 
 function testRuntimeSelection () {
   const rpc = read('autoload', 'mkdp', 'rpc.vim')
-  const bunIndex = rpc.indexOf("elseif executable('bun')")
-  const nodeIndex = rpc.indexOf("elseif executable('node')")
+  const bunIndex = rpc.indexOf("executable('bun')")
+  const nodeIndex = rpc.indexOf("executable('node')")
 
   assert.ok(bunIndex > -1, 'expected Bun runtime branch')
   assert.ok(nodeIndex > -1, 'expected Node runtime fallback branch')
   assert.ok(bunIndex < nodeIndex, 'expected Bun to be tried before Node')
+}
+
+function testMultiPortSupport () {
+  const plugin = read('plugin', 'mkdp.vim')
+  assert.match(plugin, /g:mkdp_port_range/)
+  assert.match(plugin, /g:mkdp_multi_port/)
+
+  const rpc = read('autoload', 'mkdp', 'rpc.vim')
+  assert.match(rpc, /let s:servers = {}/)
+  assert.match(rpc, /function! s:server_key/)
+  assert.match(rpc, /MKDP_START_BUFNR/)
+  assert.match(rpc, /function! mkdp#rpc#start_server\(\.\.\.\)/)
+  assert.match(rpc, /function! mkdp#rpc#stop_server\(\.\.\.\)/)
+  assert.match(rpc, /function! mkdp#rpc#open_browser\(\.\.\.\)/)
+  assert.match(rpc, /call ch_sendraw\(a:clientId, data\."\\n"\)/)
+
+  const util = read('autoload', 'mkdp', 'util.vim')
+  assert.match(util, /function! mkdp#util#open_browser\(\.\.\.\)/)
+  assert.match(util, /mkdp#rpc#open_browser\(l:bufnr\)/)
+  assert.match(util, /get\(g:, 'mkdp_multi_port', 0\)/)
+  assert.match(util, /mkdp#rpc#stop_server\(bufnr\('%'\)\)/)
+  assert.match(util, /mkdp#rpc#stop_server\(\)/)
+  assert.match(util, /let b:MarkdownPreviewToggleBool = 0/)
+  assert.doesNotMatch(util, /try_ids/)
+  assert.doesNotMatch(util, /try_open_preview_page/)
+  assert.doesNotMatch(util, /server_status ==# 0/)
+
+  const server = read('app', 'server.js')
+  assert.match(server, /function startServer/)
+  assert.match(server, /require\('net'\)/)
+  assert.match(server, /process\.env\.MKDP_START_BUFNR/)
+  assert.match(server, /listenOnAvailablePort/)
+  assert.match(server, /normalizePortRange/)
+  assert.match(server, /isPortUnavailableError/)
+  assert.match(server, /checkPortAvailable/)
+  assert.match(server, /probe\.listen\(\{ host, port \}\)/)
+  assert.match(server, /port \\d\+ \.\*in use/)
+  assert.match(server, /EADDRINUSE/)
+  assert.match(server, /EACCES/)
+  assert.match(server, /const emitToClients = \(bufnr, event, data\)/)
+  assert.match(server, /const closeClients = \(bufnr\)/)
+  assert.match(server, /clients\[bufnr\] = \(clients\[bufnr\] \|\| \[\]\)\.filter\(c => c\.id !== client\.id\)/)
+  assert.doesNotMatch(server, /map\(c => c\.id !== client\.id\)/)
+  assert.match(server, /const url = `http:\/\/\$\{openHost\}:\$\{port\}\/page\/\$\{bufnr\}`/)
+  assert.match(server, /mkdp#util#open_browser', \[startBufnr\]/)
 }
 
 function testBunCompatibleModuleLoader () {
@@ -225,6 +270,7 @@ testScrollRuntimeUsesDocumentOffset()
 testScrollRuntimeInterpolatesIndentedAdmonitionBody()
 testBuiltPreviewBundle()
 testRuntimeSelection()
+testMultiPortSupport()
 testBunCompatibleModuleLoader()
 testMermaidStaticRuntime()
 testBuildCacheHygiene()

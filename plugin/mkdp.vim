@@ -89,6 +89,16 @@ if !exists('g:mkdp_port')
   let g:mkdp_port = ''
 endif
 
+" number of ports to try from g:mkdp_port when the preferred port is busy
+if !exists('g:mkdp_port_range')
+  let g:mkdp_port_range = 32
+endif
+
+" set to 1 to start an independent preview server per buffer
+if !exists('g:mkdp_multi_port')
+  let g:mkdp_multi_port = 0
+endif
+
 " preview page title
 " ${name} will be replace with the file name
 if !exists('g:mkdp_page_title')

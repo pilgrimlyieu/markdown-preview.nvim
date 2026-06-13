@@ -1,7 +1,51 @@
 let s:mkdp_root_dir = expand('<sfile>:h:h:h')
 let s:mkdp_opts = {}
 let s:is_vim = !has('nvim')
-let s:mkdp_channel_id = s:is_vim ? v:null : -1
+let s:shared_key = '__shared__'
+let s:servers = {}
+
+function! s:empty_channel() abort
+  return s:is_vim ? v:null : -1
+endfunction
+
+function! s:server_key(bufnr) abort
+  return get(g:, 'mkdp_multi_port', 0) ? string(a:bufnr) : s:shared_key
+endfunction
+
+function! s:empty_server(bufnr) abort
+  return { 'bufnr': a:bufnr, 'channel': s:empty_channel() }
+endfunction
+
+function! s:get_server(bufnr) abort
+  return get(s:servers, s:server_key(a:bufnr), s:empty_server(a:bufnr))
+endfunction
+
+function! s:set_server(bufnr, channel) abort
+  let s:servers[s:server_key(a:bufnr)] = {
+        \ 'bufnr': a:bufnr,
+        \ 'channel': a:channel
+        \ }
+endfunction
+
+function! s:clear_server(bufnr, channel) abort
+  let l:key = s:server_key(a:bufnr)
+  if has_key(s:servers, l:key) && string(s:servers[l:key].channel) ==# string(a:channel)
+    call remove(s:servers, l:key)
+  endif
+endfunction
+
+function! s:is_channel_active(channel) abort
+  if s:is_vim
+    return a:channel !=# v:null && job_status(a:channel) ==# 'run'
+  endif
+  return type(a:channel) == type(0) && a:channel > 0
+endfunction
+
+function! s:mark_buffer_stopped(bufnr) abort
+  if bufexists(a:bufnr)
+    call setbufvar(a:bufnr, 'MarkdownPreviewToggleBool', 0)
+  endif
+endfunction
 
 function! s:on_stdout(chan_id, msgs, ...) abort
   call mkdp#util#echo_messages('Error', a:msgs)
@@ -9,133 +53,161 @@ endfunction
 function! s:on_stderr(chan_id, msgs, ...) abort
   call mkdp#util#echo_messages('Error', a:msgs)
 endfunction
-function! s:on_exit(chan_id, code, ...) abort
-  let s:mkdp_channel_id = s:is_vim ? v:null : -1
+function! s:on_exit(bufnr, chan_id, code, ...) abort
+  call s:clear_server(a:bufnr, a:chan_id)
+  call s:mark_buffer_stopped(a:bufnr)
 endfunction
 
-function! s:start_vim_server(cmd) abort
+function! s:job_env(bufnr) abort
+  let l:env = { 'MKDP_START_BUFNR': string(a:bufnr) }
+  if s:is_vim
+    let l:env['VIM_NODE_RPC'] = 1
+  endif
+  return l:env
+endfunction
+
+function! s:start_vim_server(cmd, bufnr) abort
   let options = {
         \ 'in_mode': 'json',
         \ 'out_mode': 'json',
         \ 'err_mode': 'nl',
         \ 'out_cb': function('s:on_stdout'),
         \ 'err_cb': function('s:on_stderr'),
-        \ 'exit_cb': function('s:on_exit'),
-        \ 'env': {
-        \   'VIM_NODE_RPC': 1,
-        \ }
+        \ 'exit_cb': function('s:on_exit', [a:bufnr]),
+        \ 'env': s:job_env(a:bufnr)
         \}
   if has("patch-8.1.350")
     let options['noblock'] = 1
   endif
+
   let l:job = job_start(a:cmd, options)
-  let l:status = job_status(l:job)
-  if l:status !=# 'run'
+  if job_status(l:job) !=# 'run'
     echohl Error | echon 'Failed to start vim-node-rpc service' | echohl None
     return
   endif
-  let s:mkdp_channel_id = l:job
+  call s:set_server(a:bufnr, l:job)
 endfunction
 
-function! mkdp#rpc#start_server() abort
+function! s:server_cmd() abort
   let l:mkdp_server_script = s:mkdp_root_dir . '/app/bin/markdown-preview-' . mkdp#util#get_platform()
   if executable(l:mkdp_server_script)
-    let l:cmd = [l:mkdp_server_script, '--path', s:mkdp_root_dir . '/app/server.js']
-  elseif executable('bun')
-    let l:mkdp_server_script = s:mkdp_root_dir . '/app/index.js'
-    let l:cmd = ['bun', l:mkdp_server_script, '--path', s:mkdp_root_dir . '/app/server.js']
-  elseif executable('node')
-    let l:mkdp_server_script = s:mkdp_root_dir . '/app/index.js'
-    let l:cmd = ['node', l:mkdp_server_script, '--path', s:mkdp_root_dir . '/app/server.js']
+    return [l:mkdp_server_script, '--path', s:mkdp_root_dir . '/app/server.js']
   endif
-  if exists('l:cmd')
-    if s:is_vim
-      call s:start_vim_server(l:cmd)
-    else
-      let l:nvim_optons = {
-            \ 'rpc': 1,
-            \ 'on_stdout': function('s:on_stdout'),
-            \ 'on_stderr': function('s:on_stderr'),
-            \ 'on_exit': function('s:on_exit')
-            \ }
-      let s:mkdp_channel_id = jobstart(l:cmd, l:nvim_optons)
-    endif
-  else
+  if executable('bun')
+    return ['bun', s:mkdp_root_dir . '/app/index.js', '--path', s:mkdp_root_dir . '/app/server.js']
+  endif
+  if executable('node')
+    return ['node', s:mkdp_root_dir . '/app/index.js', '--path', s:mkdp_root_dir . '/app/server.js']
+  endif
+  return []
+endfunction
+
+function! mkdp#rpc#start_server(...) abort
+  let l:bufnr = get(a:, 1, bufnr('%'))
+  if s:is_channel_active(s:get_server(l:bufnr).channel)
+    return
+  endif
+
+  let l:cmd = s:server_cmd()
+  if empty(l:cmd)
     call mkdp#util#echo_messages('Error', 'Pre build, bun, and node are not found')
+    return
+  endif
+
+  if s:is_vim
+    call s:start_vim_server(l:cmd, l:bufnr)
+  else
+    let l:opts = {
+          \ 'rpc': 1,
+          \ 'on_stdout': function('s:on_stdout'),
+          \ 'on_stderr': function('s:on_stderr'),
+          \ 'on_exit': function('s:on_exit', [l:bufnr]),
+          \ 'env': s:job_env(l:bufnr)
+          \ }
+    let l:job = jobstart(l:cmd, l:opts)
+    if l:job <= 0
+      call mkdp#util#echo_messages('Error', 'Failed to start vim-node-rpc service')
+      return
+    endif
+    call s:set_server(l:bufnr, l:job)
   endif
 endfunction
 
-function! mkdp#rpc#stop_server() abort
+function! s:stop_server(server) abort
+  let l:channel = a:server.channel
   if s:is_vim
-    if s:mkdp_channel_id !=# v:null
-      let l:status = job_status(s:mkdp_channel_id)
-      if l:status ==# 'run'
-        call mkdp#rpc#request(s:mkdp_channel_id, 'close_all_pages')
-        try
-          call job_stop(s:mkdp_channel_id)
-        catch /.*/
-        endtry
-      endif
-    endif
-    let s:mkdp_channel_id = v:null
-  else
-    if s:mkdp_channel_id !=# -1
-      call rpcrequest(s:mkdp_channel_id, 'close_all_pages')
+    if s:is_channel_active(l:channel)
       try
-        call jobstop(s:mkdp_channel_id)
+        call mkdp#rpc#request(l:channel, 'close_all_pages')
+      catch /.*/
+      endtry
+      try
+        call job_stop(l:channel)
       catch /.*/
       endtry
     endif
-    let s:mkdp_channel_id = -1
+  elseif s:is_channel_active(l:channel)
+    try
+      call rpcrequest(l:channel, 'close_all_pages')
+    catch /.*/
+    endtry
+    try
+      call jobstop(l:channel)
+    catch /.*/
+    endtry
   endif
-  let b:MarkdownPreviewToggleBool = 0
+  call s:clear_server(a:server.bufnr, l:channel)
+  call s:mark_buffer_stopped(a:server.bufnr)
 endfunction
 
-function! mkdp#rpc#get_server_status() abort
-  if s:is_vim && s:mkdp_channel_id ==# v:null
-    return -1
-  elseif !s:is_vim && s:mkdp_channel_id ==# -1
-    return -1
+function! mkdp#rpc#stop_server(...) abort
+  if a:0
+    call s:stop_server(s:get_server(a:1))
+    return
   endif
-  return 1
+
+  for l:server in values(copy(s:servers))
+    call s:stop_server(l:server)
+  endfor
+endfunction
+
+function! mkdp#rpc#get_server_status(...) abort
+  let l:bufnr = get(a:, 1, bufnr('%'))
+  return s:is_channel_active(s:get_server(l:bufnr).channel) ? 1 : -1
+endfunction
+
+function! s:notify_server(bufnr, method, args) abort
+  let l:channel = s:get_server(a:bufnr).channel
+  if !s:is_channel_active(l:channel)
+    return
+  endif
+
+  if s:is_vim
+    call mkdp#rpc#notify(l:channel, a:method, a:args)
+  else
+    call rpcnotify(l:channel, a:method, a:args)
+  endif
 endfunction
 
 function! mkdp#rpc#preview_refresh() abort
-  if s:is_vim
-    if s:mkdp_channel_id !=# v:null
-      call mkdp#rpc#notify(s:mkdp_channel_id, 'refresh_content', { 'bufnr': bufnr('%') })
-    endif
-  else
-    if s:mkdp_channel_id !=# -1
-      call rpcnotify(s:mkdp_channel_id, 'refresh_content', { 'bufnr': bufnr('%') })
-    endif
-  endif
+  let l:bufnr = bufnr('%')
+  call s:notify_server(l:bufnr, 'refresh_content', { 'bufnr': l:bufnr })
 endfunction
 
 function! mkdp#rpc#preview_close() abort
-  if s:is_vim
-    if s:mkdp_channel_id !=# v:null
-      call mkdp#rpc#notify(s:mkdp_channel_id, 'close_page', { 'bufnr': bufnr('%') })
-    endif
+  let l:bufnr = bufnr('%')
+  call s:notify_server(l:bufnr, 'close_page', { 'bufnr': l:bufnr })
+  if get(g:, 'mkdp_multi_port', 0)
+    call mkdp#rpc#stop_server(l:bufnr)
   else
-    if s:mkdp_channel_id !=# -1
-      call rpcnotify(s:mkdp_channel_id, 'close_page', { 'bufnr': bufnr('%') })
-    endif
+    let b:MarkdownPreviewToggleBool = 0
   endif
-  let b:MarkdownPreviewToggleBool = 0
   call mkdp#autocmd#clear_buf()
 endfunction
 
-function! mkdp#rpc#open_browser() abort
-  if s:is_vim
-    if s:mkdp_channel_id !=# v:null
-      call mkdp#rpc#notify(s:mkdp_channel_id, 'open_browser', { 'bufnr': bufnr('%') })
-    endif
-  else
-    if s:mkdp_channel_id !=# -1
-      call rpcnotify(s:mkdp_channel_id, 'open_browser', { 'bufnr': bufnr('%') })
-    endif
-  endif
+function! mkdp#rpc#open_browser(...) abort
+  let l:bufnr = get(a:, 1, bufnr('%'))
+  call s:notify_server(l:bufnr, 'open_browser', { 'bufnr': l:bufnr })
 endfunction
 
 function! mkdp#rpc#request(clientId, method, ...) abort
@@ -154,5 +226,5 @@ function! mkdp#rpc#notify(clientId, method, ...) abort
   let args = get(a:000, 0, [])
   " use 0 as vim request id
   let data = json_encode([0, [a:method, args]])
-  call ch_sendraw(s:mkdp_channel_id, data."\n")
+  call ch_sendraw(a:clientId, data."\n")
 endfunction

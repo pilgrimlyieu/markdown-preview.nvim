@@ -2,6 +2,7 @@ exports.run = function () {
   // attach nvim
   const { plugin } = require('./nvim')
   const http = require('http')
+  const net = require('net')
   const websocket = require('socket.io')
 
   const opener = require('./lib/util/opener')
@@ -10,6 +11,7 @@ exports.run = function () {
   const routes = require('./routes')
 
   let clients = {}
+  const startBufnr = Number(process.env.MKDP_START_BUFNR) || 0
 
   const openUrl = (url, browser) => {
     const handler = opener(url, browser)
@@ -24,12 +26,118 @@ exports.run = function () {
     })
   }
 
+  const connectedClients = (bufnr) =>
+    (clients[bufnr] || []).filter(client => client.connected)
+
+  const hasConnectedClients = () =>
+    Object.keys(clients).some(bufnr => connectedClients(bufnr).length > 0)
+
+  const forEachConnectedClient = (bufnr, callback) => {
+    clients[bufnr] = connectedClients(bufnr)
+    clients[bufnr].forEach(callback)
+  }
+
+  const emitToClients = (bufnr, event, data) => {
+    forEachConnectedClient(bufnr, client => {
+      client.emit(event, data)
+    })
+  }
+
+  const closeClients = (bufnr) => {
+    emitToClients(bufnr, 'close_page')
+    delete clients[bufnr]
+  }
+
   const update_clients_active_var = () => {
-    if (Object.values(clients).some(cs => cs.some(c => c.connected))) {
-      plugin.nvim.setVar('mkdp_clients_active', 1)
-    } else {
-      plugin.nvim.setVar('mkdp_clients_active', 0)
+    plugin.nvim.setVar('mkdp_clients_active', hasConnectedClients() ? 1 : 0)
+  }
+
+  const normalizePort = (port) => {
+    const value = Number(port)
+    return Number.isInteger(value) && value > 0 && value <= 65535 ? value : 0
+  }
+
+  const normalizePortRange = (range, startPort) => {
+    const value = Number(range)
+    if (!Number.isInteger(value) || value < 1) {
+      return 1
     }
+    return Math.min(value, 65535 - startPort + 1)
+  }
+
+  const isPortUnavailableError = (err) => {
+    if (['EADDRINUSE', 'EACCES'].includes(err && err.code)) {
+      return true
+    }
+    const message = String((err && err.message) || err || '')
+    return /(EADDRINUSE|EACCES|port \d+ .*in use)/i.test(message)
+  }
+
+  const checkPortAvailable = ({ host, port }) => new Promise((resolve, reject) => {
+    const probe = net.createServer()
+    const cleanup = () => {
+      probe.removeListener('error', onError)
+      probe.removeListener('listening', onListening)
+    }
+    const onError = (err) => {
+      cleanup()
+      reject(err)
+    }
+    const onListening = () => {
+      cleanup()
+      probe.close((err) => {
+        if (err) {
+          reject(err)
+          return
+        }
+        resolve()
+      })
+    }
+
+    probe.once('error', onError)
+    probe.once('listening', onListening)
+    try {
+      probe.listen({ host, port })
+    } catch (err) {
+      cleanup()
+      reject(err)
+    }
+  })
+
+  const listen = async ({ host, port }) => {
+    await checkPortAvailable({ host, port })
+    return new Promise((resolve, reject) => {
+      const onError = (err) => {
+        server.removeListener('listening', onListening)
+        reject(err)
+      }
+      const onListening = () => {
+        server.removeListener('error', onError)
+        resolve(server.address().port)
+      }
+
+      server.once('error', onError)
+      server.once('listening', onListening)
+      server.listen({ host, port })
+    })
+  }
+
+  const listenOnAvailablePort = async ({ host, startPort, portRange }) => {
+    let lastError = null
+    const attempts = normalizePortRange(portRange, startPort)
+    for (let offset = 0; offset < attempts; offset += 1) {
+      const port = startPort + offset
+      try {
+        return await listen({ host, port })
+      } catch (err) {
+        lastError = err
+        if (!isPortUnavailableError(err)) {
+          throw err
+        }
+        logger.warn(`port ${port} unavailable, trying next port`)
+      }
+    }
+    throw lastError
   }
 
   // http server
@@ -91,7 +199,10 @@ exports.run = function () {
 
     client.on('disconnect', function () {
       logger.info('disconnect: ', client.id)
-      clients[bufnr] = (clients[bufnr] || []).map(c => c.id !== client.id)
+      clients[bufnr] = (clients[bufnr] || []).filter(c => c.id !== client.id)
+      if (clients[bufnr].length === 0) {
+        delete clients[bufnr]
+      }
       // update vim variable
       update_clients_active_var();
     })
@@ -100,85 +211,72 @@ exports.run = function () {
   async function startServer () {
     const openToTheWord = await plugin.nvim.getVar('mkdp_open_to_the_world')
     const host = openToTheWord ? '0.0.0.0' : '127.0.0.1'
-    let port = await plugin.nvim.getVar('mkdp_port')
-    port = port || (8080 + Number(`${Date.now()}`.slice(-3)))
-    server.listen({
+    const preferredPort = normalizePort(await plugin.nvim.getVar('mkdp_port'))
+    const startPort = preferredPort || (8080 + Number(`${Date.now()}`.slice(-3)))
+    const portRange = await plugin.nvim.getVar('mkdp_port_range')
+    const port = await listenOnAvailablePort({
       host,
-      port
-    }, function () {
-      logger.info('server run: ', port)
-      function refreshPage ({ bufnr, data }) {
-        logger.info('refresh page: ', bufnr)
-        ;(clients[bufnr] || []).forEach(c => {
-          if (c.connected) {
-            c.emit('refresh_content', data)
-          }
-        })
-      }
-      function closePage ({ bufnr }) {
-        logger.info('close page: ', bufnr)
-        clients[bufnr] = (clients[bufnr] || []).filter(c => {
-          if (c.connected) {
-            c.emit('close_page')
-            return false
-          }
-          return true
-        })
-      }
-      function closeAllPages () {
-        logger.info('close all pages')
-        Object.keys(clients).forEach(bufnr => {
-          ;(clients[bufnr] || []).forEach(c => {
-            if (c.connected) {
-              c.emit('close_page')
-            }
+      startPort,
+      portRange
+    })
+    logger.info('server run: ', port)
+    function refreshPage ({ bufnr, data }) {
+      logger.info('refresh page: ', bufnr)
+      emitToClients(bufnr, 'refresh_content', data)
+    }
+    function closePage ({ bufnr }) {
+      logger.info('close page: ', bufnr)
+      closeClients(bufnr)
+    }
+    function closeAllPages () {
+      logger.info('close all pages')
+      Object.keys(clients).forEach(closeClients)
+      clients = {}
+    }
+    async function openBrowser ({ bufnr }) {
+      const combinePreview = await plugin.nvim.getVar('mkdp_combine_preview')
+      if (combinePreview && hasConnectedClients()) {
+        logger.info(`combine preview page: `, bufnr)
+        Object.keys(clients).forEach(clientBufnr => {
+          forEachConnectedClient(clientBufnr, client => {
+            client.emit('change_bufnr', bufnr)
           })
         })
-        clients = {}
-      }
-      async function openBrowser ({ bufnr }) {
-        const combinePreview = await plugin.nvim.getVar('mkdp_combine_preview')
-        if (combinePreview && Object.values(clients).some(cs => cs.some(c => c.connected))) {
-          logger.info(`combine preview page: `, bufnr)
-          Object.values(clients).forEach(cs => {
-            cs.forEach(c => {
-              if (c.connected) {
-                c.emit('change_bufnr', bufnr)
-              }
-            })
-          })
+      } else {
+        const openIp = await plugin.nvim.getVar('mkdp_open_ip')
+        const openHost = openIp !== '' ? openIp : (openToTheWord ? getIP() : 'localhost')
+        const url = `http://${openHost}:${port}/page/${bufnr}`
+        const browserfunc = await plugin.nvim.getVar('mkdp_browserfunc')
+        if (browserfunc !== '') {
+          logger.info(`open page [${browserfunc}]: `, url)
+          plugin.nvim.call(browserfunc, [url])
         } else {
-          const openIp = await plugin.nvim.getVar('mkdp_open_ip')
-          const openHost = openIp !== '' ? openIp : (openToTheWord ? getIP() : 'localhost')
-          const url = `http://${openHost}:${port}/page/${bufnr}`
-          const browserfunc = await plugin.nvim.getVar('mkdp_browserfunc')
-          if (browserfunc !== '') {
-            logger.info(`open page [${browserfunc}]: `, url)
-            plugin.nvim.call(browserfunc, [url])
+          const browser = await plugin.nvim.getVar('mkdp_browser')
+          logger.info(`open page [${browser || 'default'}]: `, url)
+          if (browser !== '') {
+            openUrl(url, browser)
           } else {
-            const browser = await plugin.nvim.getVar('mkdp_browser')
-            logger.info(`open page [${browser || 'default'}]: `, url)
-            if (browser !== '') {
-              openUrl(url, browser)
-            } else {
-              openUrl(url)
-            }
-          }
-          const isEchoUrl = await plugin.nvim.getVar('mkdp_echo_preview_url')
-          if (isEchoUrl) {
-            plugin.nvim.call('mkdp#util#echo_url', [url])
+            openUrl(url)
           }
         }
+        const isEchoUrl = await plugin.nvim.getVar('mkdp_echo_preview_url')
+        if (isEchoUrl) {
+          plugin.nvim.call('mkdp#util#echo_url', [url])
+        }
       }
-      plugin.init({
-        refreshPage,
-        closePage,
-        closeAllPages,
-        openBrowser
-      })
-
-      plugin.nvim.call('mkdp#util#open_browser')
+    }
+    plugin.init({
+      refreshPage,
+      closePage,
+      closeAllPages,
+      openBrowser
     })
+
+    if (startBufnr > 0) {
+      plugin.nvim.call('mkdp#util#open_browser', [startBufnr])
+    } else {
+      plugin.nvim.call('mkdp#util#open_browser')
+    }
   }
 
   startServer()

@@ -22,28 +22,15 @@ function! mkdp#util#echo_url(url)
   call mkdp#util#echo_messages('Type', l:url)
 endfunction
 
-" try open preview page
-function! s:try_open_preview_page(timer_id) abort
-  let l:server_status = mkdp#rpc#get_server_status()
-  if l:server_status !=# 1
-    let s:try_id = ''
-    call mkdp#rpc#stop_server()
-    call mkdp#rpc#start_server()
-  endif
-endfunction
-
 " open preview page
 function! mkdp#util#open_preview_page() abort
-  if get(s:, 'try_id', '') !=# ''
-    return
-  endif
-  let l:server_status = mkdp#rpc#get_server_status()
+  let l:bufnr = bufnr('%')
+  let l:server_status = mkdp#rpc#get_server_status(l:bufnr)
   if l:server_status ==# -1
-    call mkdp#rpc#start_server()
-  elseif l:server_status ==# 0
-    let s:try_id = timer_start(1000, function('s:try_open_preview_page'))
+    call mkdp#rpc#start_server(l:bufnr)
+    call mkdp#autocmd#init()
   else
-    call mkdp#util#open_browser()
+    call mkdp#util#open_browser(l:bufnr)
   endif
 endfunction
 
@@ -55,15 +42,23 @@ function! mkdp#util#combine_preview_refresh() abort
 endfunction
 
 " open browser
-function! mkdp#util#open_browser() abort
-  call mkdp#rpc#open_browser()
-  call mkdp#autocmd#init()
+function! mkdp#util#open_browser(...) abort
+  let l:bufnr = get(a:, 1, bufnr('%'))
+  call mkdp#rpc#open_browser(l:bufnr)
+  if l:bufnr ==# bufnr('%')
+    call mkdp#autocmd#init()
+  endif
 endfunction
 
 function! mkdp#util#stop_preview() abort
   let g:mkdp_clients_active = 0
   " TODO: delete autocmd
-  call mkdp#rpc#stop_server()
+  if get(g:, 'mkdp_multi_port', 0)
+    call mkdp#rpc#stop_server(bufnr('%'))
+  else
+    call mkdp#rpc#stop_server()
+  endif
+  let b:MarkdownPreviewToggleBool = 0
 endfunction
 
 function! mkdp#util#get_platform() abort
@@ -193,4 +188,3 @@ function! mkdp#util#toggle_preview() abort
         let b:MarkdownPreviewToggleBool=0
     endif
 endfunction
-
