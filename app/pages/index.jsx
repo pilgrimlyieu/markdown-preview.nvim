@@ -186,6 +186,7 @@ export default class PreviewPage extends React.Component {
     this.renderTimer = undefined
     this.cancelIdleRender = null
     this.cancelPostRender = null
+    this.pendingHiddenRender = null
     this.renderVersion = 0
     this.latestScroll = null
     this.rendererPromise = null
@@ -212,6 +213,7 @@ export default class PreviewPage extends React.Component {
     this.showThemeButton = this.showThemeButton.bind(this)
     this.hideThemeButton = this.hideThemeButton.bind(this)
     this.handleThemeChange = this.handleThemeChange.bind(this)
+    this.handleVisibilityChange = this.handleVisibilityChange.bind(this)
   }
 
   loadMarkdownRenderer() {
@@ -308,7 +310,38 @@ export default class PreviewPage extends React.Component {
   invalidatePendingRender() {
     this.renderVersion += 1
     this.cancelQueuedRender()
+    this.pendingHiddenRender = null
     return this.renderVersion
+  }
+
+  isPreviewHidden() {
+    return document.hidden === true
+  }
+
+  deferUntilVisible(renderWork) {
+    if (!this.isPreviewHidden()) {
+      return false
+    }
+    this.pendingHiddenRender = renderWork
+    return true
+  }
+
+  flushVisibleWork() {
+    const renderWork = this.pendingHiddenRender
+    this.pendingHiddenRender = null
+    if (renderWork) {
+      renderWork()
+      return
+    }
+    if (this.latestScroll) {
+      this.onSyncScroll(this.latestScroll)
+    }
+  }
+
+  handleVisibilityChange() {
+    if (!this.isPreviewHidden()) {
+      this.flushVisibleWork()
+    }
   }
 
   scheduleIdleRender(renderVersion, renderWork) {
@@ -434,7 +467,17 @@ export default class PreviewPage extends React.Component {
   }
 
   componentDidMount() {
+    if (document.addEventListener) {
+      document.addEventListener('visibilitychange', this.handleVisibilityChange)
+    }
     this.startSocket(parseFloat(window.location.pathname.split('/')[2]))
+  }
+
+  componentWillUnmount() {
+    if (document.removeEventListener) {
+      document.removeEventListener('visibilitychange', this.handleVisibilityChange)
+    }
+    this.invalidatePendingRender()
   }
 
   onConnect() {
@@ -457,6 +500,9 @@ export default class PreviewPage extends React.Component {
 
   onSyncScroll(scrollPayload) {
     this.latestScroll = scrollPayload
+    if (this.isPreviewHidden()) {
+      return
+    }
 
     const {
       options = {},
@@ -522,6 +568,9 @@ export default class PreviewPage extends React.Component {
     const refreshScroll = () => this.onSyncScroll(this.latestScroll || scrollPayload)
 
     if (!refreshContent) {
+      if (this.isPreviewHidden()) {
+        return
+      }
       refreshScroll()
       return
     }
@@ -582,16 +631,23 @@ export default class PreviewPage extends React.Component {
         })
         .catch((error) => {
           console.error(error)
-        })
+      })
+    }
+
+    const runRefresh = (deferRender) => {
+      if (this.deferUntilVisible(() => refreshRender(deferRender))) {
+        return
+      }
+      refreshRender(deferRender)
     }
 
     if (isInitialContent) {
-      refreshRender(false)
+      runRefresh(false)
       return
     }
     this.renderTimer = setTimeout(() => {
       this.renderTimer = undefined
-      refreshRender(true)
+      runRefresh(true)
     }, 16);
   }
 

@@ -615,7 +615,7 @@ function testScrollRuntimeCoalescesAnimationFrame () {
   assert.strictEqual(scrollCalls.length, 1)
 }
 
-function loadPreviewPageForTest ({ idleCallbacks = false, fakeTimers = false } = {}) {
+function loadPreviewPageForTest ({ idleCallbacks = false, fakeTimers = false, documentHidden = false } = {}) {
   process.env.BROWSERSLIST_IGNORE_OLD_DATA = '1'
 
   const babel = require('@babel/core')
@@ -641,6 +641,7 @@ function loadPreviewPageForTest ({ idleCallbacks = false, fakeTimers = false } =
   const rendererHighlighters = []
   const idleQueue = new Map()
   const timerQueue = new Map()
+  const documentListeners = new Map()
   let idleId = 1
   let timerId = 1
   let highlightLoadCount = 0
@@ -762,6 +763,36 @@ function loadPreviewPageForTest ({ idleCallbacks = false, fakeTimers = false } =
     : clearTimeout
 
   const module = { exports: {} }
+  const documentStub = {
+    hidden: documentHidden,
+    addEventListener: (event, callback) => {
+      const listeners = documentListeners.get(event) || []
+      listeners.push(callback)
+      documentListeners.set(event, listeners)
+    },
+    removeEventListener: (event, callback) => {
+      const listeners = documentListeners.get(event) || []
+      documentListeners.set(event, listeners.filter((listener) => listener !== callback))
+    },
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    createElement: (tag) => ({
+      tag,
+      src: '',
+      onload: null,
+      onerror: null,
+      remove: noopPlugin
+    }),
+    head: {
+      appendChild: (element) => {
+        if (element.tag === 'link') {
+          styles.push(element)
+        } else {
+          scripts.push(element)
+        }
+      }
+    }
+  }
   const context = {
     module,
     exports: module.exports,
@@ -771,26 +802,7 @@ function loadPreviewPageForTest ({ idleCallbacks = false, fakeTimers = false } =
     clearTimeout: clearTimer,
     Promise,
     window: windowStub,
-    document: {
-      querySelector: () => null,
-      querySelectorAll: () => [],
-      createElement: (tag) => ({
-        tag,
-        src: '',
-        onload: null,
-        onerror: null,
-        remove: noopPlugin
-      }),
-      head: {
-        appendChild: (element) => {
-          if (element.tag === 'link') {
-            styles.push(element)
-          } else {
-            scripts.push(element)
-          }
-        }
-      }
-    }
+    document: documentStub
   }
 
   vm.runInNewContext(code, context)
@@ -804,6 +816,12 @@ function loadPreviewPageForTest ({ idleCallbacks = false, fakeTimers = false } =
     highlightedRenderCalls,
     rendererHighlighters,
     highlightLoadCount: () => highlightLoadCount,
+    setDocumentHidden: (hidden) => {
+      documentStub.hidden = hidden
+    },
+    dispatchDocumentEvent: (event) => {
+      ;(documentListeners.get(event) || []).forEach((callback) => callback())
+    },
     runIdleCallbacks: () => {
       for (const [id, callback] of Array.from(idleQueue.entries())) {
         idleQueue.delete(id)
@@ -836,6 +854,102 @@ async function waitForCondition (condition, message) {
     }
   }
   assert.fail(typeof message === 'function' ? message() : message)
+}
+
+async function testHiddenPreviewDefersRenderingUntilVisible () {
+  const {
+    PreviewPage,
+    renderCalls,
+    scrollCalls,
+    setDocumentHidden,
+    dispatchDocumentEvent,
+    runIdleCallbacks,
+    pendingIdleCallbacks,
+    runTimers,
+    pendingTimers
+  } = loadPreviewPageForTest({ documentHidden: true, fakeTimers: true, idleCallbacks: true })
+  const page = new PreviewPage({})
+  page.componentDidMount()
+
+  const refresh = (line, content) => page.onRefreshContent({
+    options: { sync_scroll_type: 'middle' },
+    isActive: true,
+    winline: 1,
+    winheight: 20,
+    cursor: [0, line, 1, 0],
+    pageTitle: '',
+    theme: 'light',
+    name: '/tmp/hidden.md',
+    content: [content]
+  })
+
+  refresh(1, '# Hidden')
+  await flushPromises()
+  assert.strictEqual(page.state.content, '')
+  assert.deepStrictEqual(renderCalls, [])
+  assert.deepStrictEqual(scrollCalls, [])
+
+  refresh(2, '# Latest')
+  assert.strictEqual(pendingTimers(), 1)
+  runTimers()
+  await flushPromises()
+  assert.strictEqual(page.state.content, '')
+  assert.deepStrictEqual(renderCalls, [])
+  assert.strictEqual(pendingIdleCallbacks(), 0)
+
+  setDocumentHidden(false)
+  dispatchDocumentEvent('visibilitychange')
+  await flushPromises()
+  assert.strictEqual(pendingIdleCallbacks(), 1)
+
+  runIdleCallbacks()
+  await flushPromises()
+
+  assert.strictEqual(page.state.content, '<p># Latest</p>')
+  assert.deepStrictEqual(renderCalls, ['# Latest'])
+  assert.strictEqual(scrollCalls[scrollCalls.length - 1].cursor, 2)
+  page.componentWillUnmount()
+}
+
+async function testHiddenPreviewDefersScrollUntilVisible () {
+  const {
+    PreviewPage,
+    scrollCalls,
+    setDocumentHidden,
+    dispatchDocumentEvent
+  } = loadPreviewPageForTest()
+  const page = new PreviewPage({})
+  page.componentDidMount()
+
+  page.onRefreshContent({
+    options: { sync_scroll_type: 'middle' },
+    isActive: true,
+    winline: 1,
+    winheight: 20,
+    cursor: [0, 1, 1, 0],
+    pageTitle: '',
+    theme: 'light',
+    name: '/tmp/hidden.md',
+    content: ['# Visible']
+  })
+  await flushPromises()
+
+  const scrollCount = scrollCalls.length
+  setDocumentHidden(true)
+  page.onSyncScroll({
+    options: { sync_scroll_type: 'middle' },
+    isActive: true,
+    winline: 3,
+    winheight: 20,
+    cursor: [0, 9, 1, 0],
+    len: 20
+  })
+  assert.strictEqual(scrollCalls.length, scrollCount)
+
+  setDocumentHidden(false)
+  dispatchDocumentEvent('visibilitychange')
+  assert.strictEqual(scrollCalls[scrollCalls.length - 1].cursor, 9)
+  page.componentWillUnmount()
 }
 
 async function testAsyncMathRenderUsesLatestScrollPayload () {
@@ -1792,6 +1906,8 @@ async function main () {
   testScrollRuntimeInterpolatesIndentedAdmonitionBody()
   testScrollRuntimeCachesSourceLineAnchors()
   testScrollRuntimeCoalescesAnimationFrame()
+  await testHiddenPreviewDefersRenderingUntilVisible()
+  await testHiddenPreviewDefersScrollUntilVisible()
   await testAsyncMathRenderUsesLatestScrollPayload()
   await testInitialMhchemLoadWaitsForKatex()
   await testMhchemLoadsAfterKatexIsReady()
