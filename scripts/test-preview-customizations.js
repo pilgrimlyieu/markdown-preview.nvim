@@ -1436,6 +1436,8 @@ function testNativePreviewTransport () {
   assert.match(server, /new WebSocket\.Server\(\{/)
   assert.match(server, /path: '\/ws'/)
   assert.match(server, /client\.send\(JSON\.stringify\(\{ event, data \}\)\)/)
+  assert.match(server, /const hasClients = \(\{ bufnr \}\) =>/)
+  assert.match(server, /hasClients,/)
   assert.doesNotMatch(server, /socket\.io|client\.emit\(/)
 
   const preload = read('src', 'app', 'preloadmodules.ts')
@@ -1484,7 +1486,13 @@ function testCursorSyncUsesLightweightEvent () {
 
   const attach = read('src', 'attach', 'index.ts')
   assert.match(attach, /const getScrollData = async/)
+  assert.match(attach, /hasClients: \(\(params: IBufferEvent\) => boolean\)/)
+  assert.match(attach, /!app\.hasClients\(\{ bufnr \}\)/)
   assert.match(attach, /method === 'sync_scroll' && opts\.data/)
+  assert.ok(
+    attach.indexOf('!app.hasClients({ bufnr })') < attach.indexOf("method === 'sync_scroll' && opts.data"),
+    'expected no-client sync scroll to be dropped before emitting to clients'
+  )
   assert.ok(
     attach.indexOf("method === 'sync_scroll' && opts.data") < attach.indexOf('const buffer = await findBuffer(bufnr)'),
     'expected precomputed sync scroll payload to avoid buffer lookup'
@@ -1566,6 +1574,7 @@ function testHighFrequencyLogsAreDebugOnly () {
 function testFreshRefreshSkipsFullContent () {
   const attach = read('src', 'attach', 'index.ts')
   assert.match(attach, /const getChangedtick = \(bufnr/)
+  assert.match(attach, /\(method === 'refresh_content' \|\| method === 'sync_scroll'\) && !app\.hasClients\(\{ bufnr \}\)/)
   assert.match(attach, /const resolveField = async/)
   assert.match(attach, /const withLineCount = async/)
   assert.match(attach, /const scrollData = opts\.data \|\| await getScrollData\(buffer\)/)
@@ -1576,11 +1585,15 @@ function testFreshRefreshSkipsFullContent () {
   const freshnessCheck = attach.indexOf('app.isContentFresh')
   const fullContentRead = attach.indexOf('buffer.getLines()')
   const cursorSyncBranch = attach.indexOf("method === 'sync_scroll'")
+  const clientsCheck = attach.indexOf('!app.hasClients({ bufnr })')
   const snapshotRead = attach.indexOf('const scrollData = opts.data || await getScrollData(buffer)')
   const changedtickRead = attach.indexOf("const changedtick = await resolveField(scrollData, 'changedtick'")
   assert.ok(freshnessCheck > -1, 'expected freshness check in attach bridge')
   assert.ok(fullContentRead > -1, 'expected full content read in attach bridge')
   assert.ok(cursorSyncBranch > -1, 'expected cursor sync branch in attach bridge')
+  assert.ok(clientsCheck > -1, 'expected no-client guard in attach bridge')
+  assert.ok(clientsCheck < fullContentRead, 'expected no-client guard before buffer.getLines()')
+  assert.ok(clientsCheck < attach.indexOf('const buffer = await findBuffer(bufnr)'), 'expected no-client guard before buffer lookup')
   assert.ok(snapshotRead > -1, 'expected attach bridge to prefer Vim-side refresh snapshot')
   assert.ok(changedtickRead > -1, 'expected changedtick read in attach bridge')
   assert.ok(cursorSyncBranch < changedtickRead, 'expected cursor sync to avoid changedtick RPC')

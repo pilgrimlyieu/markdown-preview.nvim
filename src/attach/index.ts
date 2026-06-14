@@ -20,6 +20,7 @@ interface IApp {
   closePage: ((params: IBufferEvent) => void)
   closeAllPages: (() => void)
   syncScroll: ((param: IPageEvent) => void)
+  hasClients: ((params: IBufferEvent) => boolean)
   isContentFresh: ((params: IContentTickEvent) => boolean)
   openBrowser: ((params: IBufferEvent) => void)
 }
@@ -72,6 +73,9 @@ export default function(options: Attach): IPlugin {
   nvim.on('notification', async (method: string, args: any[]) => {
     const opts = args[0] || args
     const bufnr = opts.bufnr
+    if ((method === 'refresh_content' || method === 'sync_scroll') && !app.hasClients({ bufnr })) {
+      return
+    }
     if (method === 'sync_scroll' && opts.data) {
       app.syncScroll({
         bufnr,

@@ -54,6 +54,11 @@ exports.run = function () {
   const hasConnectedClients = () =>
     Object.keys(clients).some(bufnr => connectedClients(bufnr).length > 0)
 
+  const hasClients = ({ bufnr }) => {
+    clients[bufnr] = connectedClients(bufnr)
+    return clients[bufnr].length > 0
+  }
+
   const forEachConnectedClient = (bufnr, callback) => {
     clients[bufnr] = connectedClients(bufnr)
     clients[bufnr].forEach(callback)
@@ -318,6 +323,7 @@ exports.run = function () {
       closePage,
       closeAllPages,
       syncScroll,
+      hasClients,
       isContentFresh,
       openBrowser
     })
