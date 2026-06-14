@@ -32,24 +32,28 @@ Main features:
 
 ### Installation & Usage
 
+This fork builds locally with Bun. The generated `app/lib` and `app/out`
+directories are ignored; run the build once after install or plugin update:
+
+```sh
+bun install --frozen-lockfile
+bun run build-local
+```
+
 Install with [vim-plug](https://github.com/junegunn/vim-plug):
 
 ```vim
-" If you don't have nodejs and yarn
-" use pre build, add 'vim-plug' to the filetype list so vim-plug can update this plugin
-" see: https://github.com/iamcco/markdown-preview.nvim/issues/50
 Plug 'iamcco/markdown-preview.nvim', { 'do': { -> mkdp#util#install() }, 'for': ['markdown', 'vim-plug']}
 
-
-" If you have nodejs
-Plug 'iamcco/markdown-preview.nvim', { 'do': 'cd app && npx --yes yarn install' }
+" Or run the Bun build directly
+Plug 'iamcco/markdown-preview.nvim', { 'do': 'bun install --frozen-lockfile && bun run build-local' }
 ```
 
 Or install with [dein](https://github.com/Shougo/dein.vim):
 
 ```vim
 call dein#add('iamcco/markdown-preview.nvim', {'on_ft': ['markdown', 'pandoc.markdown', 'rmd'],
-					\ 'build': 'sh -c "cd app && npx --yes yarn install"' })
+					\ 'build': 'sh -c "bun install --frozen-lockfile && bun run build-local"' })
 ```
 
 Or with [minpac](https://github.com/k-takata/minpac):
@@ -75,7 +79,6 @@ Or with [lazy.nvim](https://github.com/folke/lazy.nvim):
 Add this in your `init.lua or plugins.lua`
 
 ```lua
--- install without yarn or npm
 {
     "iamcco/markdown-preview.nvim",
     cmd = { "MarkdownPreviewToggle", "MarkdownPreview", "MarkdownPreviewStop" },
@@ -83,11 +86,11 @@ Add this in your `init.lua or plugins.lua`
     build = function() vim.fn["mkdp#util#install"]() end,
 }
 
--- install with yarn or npm
+-- Or run the Bun build directly
 {
   "iamcco/markdown-preview.nvim",
   cmd = { "MarkdownPreviewToggle", "MarkdownPreview", "MarkdownPreviewStop" },
-  build = "cd app && yarn install",
+  build = "bun install --frozen-lockfile && bun run build-local",
   init = function()
     vim.g.mkdp_filetypes = { "markdown" }
   end,
@@ -100,13 +103,12 @@ Or with [Packer.nvim](https://github.com/wbthomason/packer.nvim):
 Add this in your `init.lua or plugins.lua`
 
 ```lua
--- install without yarn or npm
 use({
     "iamcco/markdown-preview.nvim",
     run = function() vim.fn["mkdp#util#install"]() end,
 })
 
-use({ "iamcco/markdown-preview.nvim", run = "cd app && npm install", setup = function() vim.g.mkdp_filetypes = { "markdown" } end, ft = { "markdown" }, })
+use({ "iamcco/markdown-preview.nvim", run = "bun install --frozen-lockfile && bun run build-local", setup = function() vim.g.mkdp_filetypes = { "markdown" } end, ft = { "markdown" }, })
 ```
 
 Or by hand:
@@ -121,11 +123,11 @@ add plugin to the `~/.local/share/nvim/site/pack/packer/start/` directory:
 cd ~/.local/share/nvim/site/pack/packer/start/
 git clone https://github.com/iamcco/markdown-preview.nvim.git
 cd markdown-preview.nvim
-npx --yes yarn install
-npx --yes yarn build
+bun install --frozen-lockfile
+bun run build-local
 ```
 
-Please make sure that you have installed `node.js` and `yarn`.
+Please make sure that you have installed `bun`.
 Open `nvim` and run `:PackerInstall` to make it workable
 
 ### MarkdownPreview Config:
@@ -473,7 +475,7 @@ Vim support is powered by [@chemzqm/neovim](https://github.com/neoclide/neovim)
 - [chart.js](https://github.com/chartjs/Chart.js)
 - [highlight](https://github.com/highlightjs/highlight.js)
 - [neovim/node-client](https://github.com/neovim/node-client)
-- [next.js](https://github.com/zeit/next.js)
+- [Vite](https://github.com/vitejs/vite)
 - [markdown.css](https://github.com/iamcco/markdown.css)
 - [markdown-it](https://github.com/markdown-it/markdown-it)
 - [markdown-it-katex](https://github.com/waylonflinn/markdown-it-katex)

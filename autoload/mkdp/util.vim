@@ -1,6 +1,5 @@
 let s:mkdp_root_dir = expand('<sfile>:h:h:h')
 let s:pre_build = s:mkdp_root_dir . '/app/bin/markdown-preview-'
-let s:package_file = s:mkdp_root_dir . '/package.json'
 
 " echo message
 function! mkdp#util#echo_messages(hl, msgs)
@@ -129,25 +128,27 @@ function! s:markdown_preview_installed(status, ...) abort
   echo '[markdown-preview.nvim]: install completed'
 endfunction
 
-function! s:trim(str) abort
-  return substitute(a:str, '\v^(\s|\\n)*|(\s|\\n)*$', '', 'g')
+function! s:install_cmd() abort
+  if executable('bun')
+    return 'bun install --frozen-lockfile && bun run build-local'
+  endif
+  return ''
 endfunction
 
 function! mkdp#util#install(...)
-  let l:version = mkdp#util#pre_build_version()
-  let l:info = json_decode(join(readfile(s:mkdp_root_dir . '/package.json'), ''))
-  if s:trim(l:version) ==# s:trim(l:info.version)
+  let l:cmd = s:install_cmd()
+  if empty(l:cmd)
+    call mkdp#util#echo_messages('Error', '[markdown-preview.nvim]: Bun is required to build this fork')
     return
   endif
-  let obj = json_decode(join(readfile(s:package_file)))
-  let cmd = (mkdp#util#get_platform() ==# 'win' ? 'install.cmd' : './install.sh') . ' v'.obj['version']
+
   if get(a:, '1', v:false) ==# v:true
-    execute 'lcd ' . s:mkdp_root_dir . '/app'
-    execute '!' . cmd
+    execute 'lcd ' . fnameescape(s:mkdp_root_dir)
+    execute '!' . l:cmd
   else
     call mkdp#util#open_terminal({
-          \ 'cmd': cmd,
-          \ 'cwd': s:mkdp_root_dir . '/app',
+          \ 'cmd': l:cmd,
+          \ 'cwd': s:mkdp_root_dir,
           \ 'Callback': function('s:markdown_preview_installed')
           \})
     wincmd p

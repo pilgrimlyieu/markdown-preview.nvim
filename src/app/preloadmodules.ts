@@ -4,10 +4,12 @@ const tslib = require('tslib')
 const ws = require('ws')
 const msgpackLite = require('msgpack-lite')
 
-export default {
+const modules: { [name: string]: unknown } = {
   '@chemzqm/neovim': neovim,
   log4js,
   tslib,
   ws,
   'msgpack-lite': msgpackLite
 }
+
+export default modules

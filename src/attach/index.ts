@@ -1,49 +1,45 @@
 import { attach, Attach, NeovimClient } from '@chemzqm/neovim'
+import {
+  BufferId,
+  ChangedTick,
+  PreviewPayload,
+  PreviewApp,
+  PreviewPlugin
+} from '../app-contract'
 
-const logger = require('../util/logger')('attach') // tslint:disable-line
+const logger = require('../util/logger')('attach')
 
-interface IPageEvent {
-  bufnr: number | string
-  data: any
+let app: PreviewApp | undefined
+
+interface VimBuffer {
+  id: number
+  name: string | Promise<string>
+  getLines: (() => Promise<string[]>)
 }
 
-interface IBufferEvent {
-  bufnr: number | string
+interface NotificationPayload {
+  bufnr: BufferId
+  data?: PreviewPayload
 }
 
-interface IContentTickEvent extends IBufferEvent {
-  changedtick: number | string
+interface ResponseHandle {
+  send: (() => void)
 }
 
-interface IApp {
-  refreshPage: ((param: IPageEvent) => void)
-  closePage: ((params: IBufferEvent) => void)
-  closeAllPages: (() => void)
-  syncScroll: ((param: IPageEvent) => void)
-  hasClients: ((params: IBufferEvent) => boolean)
-  isContentFresh: ((params: IContentTickEvent) => boolean)
-  openBrowser: ((params: IBufferEvent) => void)
-}
+const asString = (value: unknown) => typeof value === 'string' ? value : ''
 
-interface IPlugin {
-  init: ((app: IApp) => void)
-  nvim: NeovimClient
-}
-
-let app: IApp | undefined
-
-export default function(options: Attach): IPlugin {
+export default function(options: Attach): PreviewPlugin {
   const nvim: NeovimClient = attach(options)
 
-  const findBuffer = async (bufnr: number | string) => {
+  const findBuffer = async (bufnr: BufferId): Promise<VimBuffer | undefined> => {
     const buffers = await nvim.buffers
-    return buffers.find(buffer => buffer.id === Number(bufnr))
+    return buffers.find(buffer => buffer.id === Number(bufnr)) as VimBuffer | undefined
   }
 
-  const getChangedtick = (bufnr: number | string) =>
-    nvim.call('getbufvar', [Number(bufnr), 'changedtick'])
+  const getChangedtick = async (bufnr: BufferId): Promise<ChangedTick> =>
+    await nvim.call('getbufvar', [Number(bufnr), 'changedtick']) as ChangedTick
 
-  const getScrollData = async (buffer: any) => {
+  const getScrollData = async (buffer: VimBuffer): Promise<PreviewPayload> => {
     const winline = await nvim.call('winline')
     const currentWindow = await nvim.window
     const winheight = await nvim.call('winheight', currentWindow.id)
@@ -59,10 +55,14 @@ export default function(options: Attach): IPlugin {
     }
   }
 
-  const resolveField = async (data: any, key: string, fallback: (() => Promise<any>)) =>
+  const resolveField = async <K extends keyof PreviewPayload>(
+    data: PreviewPayload | undefined,
+    key: K,
+    fallback: (() => Promise<PreviewPayload[K]> | PreviewPayload[K])
+  ): Promise<PreviewPayload[K]> =>
     data && data[key] !== undefined ? data[key] : fallback()
 
-  const withLineCount = async (data: any) =>
+  const withLineCount = async (data: PreviewPayload): Promise<PreviewPayload> =>
     data && data.len !== undefined
       ? data
       : {
@@ -70,8 +70,8 @@ export default function(options: Attach): IPlugin {
           len: await nvim.call('line', ['$'])
         }
 
-  nvim.on('notification', async (method: string, args: any[]) => {
-    const opts = args[0] || args
+  nvim.on('notification', async (method: string, args: unknown[]) => {
+    const opts = (args[0] || {}) as NotificationPayload
     const bufnr = opts.bufnr
     const currentApp = app
     if (!currentApp) {
@@ -110,8 +110,8 @@ export default function(options: Attach): IPlugin {
         return
       }
 
-      const pageTitle = await resolveField(scrollData, 'pageTitle', () => nvim.getVar('mkdp_page_title'))
-      const theme = await resolveField(scrollData, 'theme', () => nvim.getVar('mkdp_theme'))
+      const pageTitle = await resolveField(scrollData, 'pageTitle', async () => asString(await nvim.getVar('mkdp_page_title')))
+      const theme = await resolveField(scrollData, 'theme', async () => asString(await nvim.getVar('mkdp_theme')))
       const name = await resolveField(scrollData, 'name', () => buffer.name)
       const content = await buffer.getLines()
       currentApp.refreshPage({
@@ -136,7 +136,7 @@ export default function(options: Attach): IPlugin {
     }
   })
 
-  nvim.on('request', (method: string, args: any, resp: any) => {
+  nvim.on('request', (method: string, args: unknown, resp: ResponseHandle) => {
     if (method === 'close_all_pages') {
       const currentApp = app
       if (currentApp) {
@@ -156,7 +156,7 @@ export default function(options: Attach): IPlugin {
 
   return {
     nvim,
-    init: (param: IApp) => {
+    init: (param: PreviewApp) => {
       app = param
     }
   }

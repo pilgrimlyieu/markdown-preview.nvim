@@ -5,25 +5,34 @@ import vm from 'vm'
 
 import modules from './preloadmodules'
 
-export default function load(scriptPath) {
+interface ModuleWithMutableRequire extends Module {
+  require: NodeRequire
+}
+
+const nodeModulePaths = (Module as unknown as {
+  _nodeModulePaths: (from: string) => string[]
+})._nodeModulePaths
+
+export default function load<T = unknown>(scriptPath: string): T {
   const userModule = new Module(scriptPath)
   userModule.filename = scriptPath
-  userModule.paths = (Module as any)._nodeModulePaths(path.dirname(scriptPath))
+  userModule.paths = nodeModulePaths(path.dirname(scriptPath))
 
   const moduleCode = fs.readFileSync(userModule.filename, 'utf-8')
 
-  userModule.require = Module.createRequire(userModule.filename)
+  const mutableModule = userModule as ModuleWithMutableRequire
+  mutableModule.require = Module.createRequire(userModule.filename)
 
   const sanbox = vm.createContext({
     ...global,
-    exports: userModule.exports,
-    module: userModule,
-    require: name => {
+    exports: mutableModule.exports,
+    module: mutableModule,
+    require: (name: string) => {
       if (modules[name]) {
         return modules[name]
       }
       try {
-        return userModule.require(name)
+        return mutableModule.require(name)
       } catch (e) {
         let loadScript = path.join(path.dirname(scriptPath), name)
         if (fs.existsSync(loadScript) && fs.statSync(loadScript).isDirectory()) {
@@ -41,5 +50,5 @@ export default function load(scriptPath) {
 
   vm.runInContext(moduleCode, sanbox, { filename: userModule.filename })
 
-  return userModule.exports
+  return mutableModule.exports as T
 }

@@ -192,13 +192,13 @@ endfunction
 function! s:server_cmd() abort
   let l:mkdp_server_script = s:mkdp_root_dir . '/app/bin/markdown-preview-' . mkdp#util#get_platform()
   if executable(l:mkdp_server_script)
-    return [l:mkdp_server_script, '--path', s:mkdp_root_dir . '/app/server.js']
+    return [l:mkdp_server_script, '--path', s:mkdp_root_dir . '/app/lib/server.js']
   endif
   if executable('bun')
-    return ['bun', s:mkdp_root_dir . '/app/index.js', '--path', s:mkdp_root_dir . '/app/server.js']
+    return ['bun', s:mkdp_root_dir . '/app/lib/app/index.js', '--path', s:mkdp_root_dir . '/app/lib/server.js']
   endif
   if executable('node')
-    return ['node', s:mkdp_root_dir . '/app/index.js', '--path', s:mkdp_root_dir . '/app/server.js']
+    return ['node', s:mkdp_root_dir . '/app/lib/app/index.js', '--path', s:mkdp_root_dir . '/app/lib/server.js']
   endif
   return []
 endfunction
