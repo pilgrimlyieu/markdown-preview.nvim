@@ -9,7 +9,8 @@ module.exports = function opener(
   tool: string | undefined
 ) {
   let platform = process.platform
-  args = [].concat(args)
+  let command: string
+  let spawnArgs = Array.isArray(args) ? args.slice() : [args]
 
   // Attempt to detect Windows Subystem for Linux (WSL).
   // WSL  itself as Linux (which works in most cases), but in
@@ -21,20 +22,19 @@ module.exports = function opener(
   }
 
   // http://stackoverflow.com/q/1480971/3191, but see below for Windows.
-  let command
   switch (platform) {
     case 'win32': {
       command = 'cmd.exe'
       if (tool) {
-        args.unshift(tool)
+        spawnArgs.unshift(tool)
       }
       break
     }
     case 'darwin': {
       command = 'open'
       if (tool) {
-        args.unshift(tool)
-        args.unshift('-a')
+        spawnArgs.unshift(tool)
+        spawnArgs.unshift('-a')
       }
       break
     }
@@ -55,13 +55,13 @@ module.exports = function opener(
     // so we need to add a dummy empty-string window title: http://stackoverflow.com/a/154090/3191
     //
     // Additionally, on Windows ampersand needs to be escaped when passed to "start"
-    args = args.map(value => {
+    spawnArgs = spawnArgs.map(value => {
       return value.replace(/&/g, '^&')
     })
-    args = ['/c', 'start', '""'].concat(args)
+    spawnArgs = ['/c', 'start', '""'].concat(spawnArgs)
   }
 
-  return childProcess.spawn(command, args, {
+  return childProcess.spawn(command, spawnArgs, {
     shell: false,
     detached: true
   })

@@ -30,7 +30,7 @@ interface IPlugin {
   nvim: NeovimClient
 }
 
-let app: IApp
+let app: IApp | undefined
 
 export default function(options: Attach): IPlugin {
   const nvim: NeovimClient = attach(options)
@@ -73,11 +73,16 @@ export default function(options: Attach): IPlugin {
   nvim.on('notification', async (method: string, args: any[]) => {
     const opts = args[0] || args
     const bufnr = opts.bufnr
-    if ((method === 'refresh_content' || method === 'sync_scroll') && !app.hasClients({ bufnr })) {
+    const currentApp = app
+    if (!currentApp) {
+      logger.warn('drop notification before app init: ', method)
+      return
+    }
+    if ((method === 'refresh_content' || method === 'sync_scroll') && !currentApp.hasClients({ bufnr })) {
       return
     }
     if (method === 'sync_scroll' && opts.data) {
-      app.syncScroll({
+      currentApp.syncScroll({
         bufnr,
         data: opts.data
       })
@@ -90,15 +95,15 @@ export default function(options: Attach): IPlugin {
       }
       const scrollData = opts.data || await getScrollData(buffer)
       if (method === 'sync_scroll') {
-        app.syncScroll({
+        currentApp.syncScroll({
           bufnr,
           data: await withLineCount(scrollData)
         })
         return
       }
       const changedtick = await resolveField(scrollData, 'changedtick', () => getChangedtick(bufnr))
-      if (app.isContentFresh({ bufnr, changedtick })) {
-        app.syncScroll({
+      if (currentApp.isContentFresh({ bufnr, changedtick })) {
+        currentApp.syncScroll({
           bufnr,
           data: await withLineCount(scrollData)
         })
@@ -109,7 +114,7 @@ export default function(options: Attach): IPlugin {
       const theme = await resolveField(scrollData, 'theme', () => nvim.getVar('mkdp_theme'))
       const name = await resolveField(scrollData, 'name', () => buffer.name)
       const content = await buffer.getLines()
-      app.refreshPage({
+      currentApp.refreshPage({
         bufnr,
         data: {
           ...scrollData,
@@ -121,11 +126,11 @@ export default function(options: Attach): IPlugin {
         }
       })
     } else if (method === 'close_page') {
-      app.closePage({
+      currentApp.closePage({
         bufnr
       })
     } else if (method === 'open_browser') {
-      app.openBrowser({
+      currentApp.openBrowser({
         bufnr
       })
     }
@@ -133,7 +138,10 @@ export default function(options: Attach): IPlugin {
 
   nvim.on('request', (method: string, args: any, resp: any) => {
     if (method === 'close_all_pages') {
-      app.closeAllPages()
+      const currentApp = app
+      if (currentApp) {
+        currentApp.closeAllPages()
+      }
     }
     resp.send()
   })

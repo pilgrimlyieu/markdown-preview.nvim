@@ -1491,10 +1491,12 @@ function testCursorSyncUsesLightweightEvent () {
   const attach = read('src', 'attach', 'index.ts')
   assert.match(attach, /const getScrollData = async/)
   assert.match(attach, /hasClients: \(\(params: IBufferEvent\) => boolean\)/)
-  assert.match(attach, /!app\.hasClients\(\{ bufnr \}\)/)
+  assert.match(attach, /const currentApp = app/)
+  assert.match(attach, /if \(!currentApp\)/)
+  assert.match(attach, /!currentApp\.hasClients\(\{ bufnr \}\)/)
   assert.match(attach, /method === 'sync_scroll' && opts\.data/)
   assert.ok(
-    attach.indexOf('!app.hasClients({ bufnr })') < attach.indexOf("method === 'sync_scroll' && opts.data"),
+    attach.indexOf('!currentApp.hasClients({ bufnr })') < attach.indexOf("method === 'sync_scroll' && opts.data"),
     'expected no-client sync scroll to be dropped before emitting to clients'
   )
   assert.ok(
@@ -1502,7 +1504,7 @@ function testCursorSyncUsesLightweightEvent () {
     'expected precomputed sync scroll payload to avoid buffer lookup'
   )
   assert.match(attach, /method === 'refresh_content' \|\| method === 'sync_scroll'/)
-  assert.match(attach, /app\.syncScroll/)
+  assert.match(attach, /currentApp\.syncScroll/)
   assert.match(attach, /nvim\.call\('line', \['\$'\]\)/)
 
   const server = read('app', 'server.js')
@@ -1579,21 +1581,78 @@ function testHighFrequencyLogsAreDebugOnly () {
   assert.doesNotMatch(routes, /logger\.info\('imgPath'/)
 }
 
+function testTypescriptCatchesUninitializedApp () {
+  const tsconfig = JSON.parse(read('tsconfig.json'))
+  assert.strictEqual(tsconfig.compilerOptions.strictNullChecks, true)
+
+  const attach = read('src', 'attach', 'index.ts')
+  assert.match(attach, /let app: IApp \| undefined/)
+  assert.match(attach, /const currentApp = app/)
+  assert.match(attach, /if \(!currentApp\) \{/)
+  assert.match(attach, /return\s*\n\s*\}/)
+  assert.doesNotMatch(attach, /let app: IApp\s*\n/)
+  assert.doesNotMatch(attach, /app\.hasClients\(\{ bufnr \}\)/)
+}
+
+function testAttachDropsNotificationBeforeInit () {
+  const script = `
+    const EventEmitter = require('events')
+    const path = require('path')
+
+    const root = ${JSON.stringify(root)}
+    const neovimPath = require.resolve('@chemzqm/neovim', {
+      paths: [path.join(root, 'app', 'lib', 'attach')]
+    })
+    const fakeNvim = new EventEmitter()
+    fakeNvim.channelId = Promise.resolve(1)
+    fakeNvim.setVar = async () => {}
+
+    require.cache[neovimPath] = {
+      id: neovimPath,
+      filename: neovimPath,
+      loaded: true,
+      exports: { attach: () => fakeNvim }
+    }
+
+    let unhandled = null
+    process.on('unhandledRejection', (error) => {
+      unhandled = error
+    })
+
+    require(path.join(root, 'app', 'lib', 'attach', 'index.js')).default({})
+    fakeNvim.emit('notification', 'refresh_content', [{ bufnr: 1, data: {} }])
+
+    setTimeout(() => {
+      if (unhandled) {
+        console.error(unhandled.stack || unhandled.message || unhandled)
+        process.exit(1)
+      }
+      process.exit(0)
+    }, 50)
+  `
+
+  childProcess.execFileSync(process.execPath, ['-e', script], {
+    cwd: root,
+    stdio: 'pipe',
+    timeout: 5000
+  })
+}
+
 function testFreshRefreshSkipsFullContent () {
   const attach = read('src', 'attach', 'index.ts')
   assert.match(attach, /const getChangedtick = \(bufnr/)
-  assert.match(attach, /\(method === 'refresh_content' \|\| method === 'sync_scroll'\) && !app\.hasClients\(\{ bufnr \}\)/)
+  assert.match(attach, /\(method === 'refresh_content' \|\| method === 'sync_scroll'\) && !currentApp\.hasClients\(\{ bufnr \}\)/)
   assert.match(attach, /const resolveField = async/)
   assert.match(attach, /const withLineCount = async/)
   assert.match(attach, /const scrollData = opts\.data \|\| await getScrollData\(buffer\)/)
   assert.match(attach, /const changedtick = await resolveField\(scrollData, 'changedtick', \(\) => getChangedtick\(bufnr\)\)/)
-  assert.match(attach, /app\.isContentFresh\(\{ bufnr, changedtick \}\)/)
+  assert.match(attach, /currentApp\.isContentFresh\(\{ bufnr, changedtick \}\)/)
   assert.match(attach, /changedtick/)
 
-  const freshnessCheck = attach.indexOf('app.isContentFresh')
+  const freshnessCheck = attach.indexOf('currentApp.isContentFresh')
   const fullContentRead = attach.indexOf('buffer.getLines()')
   const cursorSyncBranch = attach.indexOf("method === 'sync_scroll'")
-  const clientsCheck = attach.indexOf('!app.hasClients({ bufnr })')
+  const clientsCheck = attach.indexOf('!currentApp.hasClients({ bufnr })')
   const snapshotRead = attach.indexOf('const scrollData = opts.data || await getScrollData(buffer)')
   const changedtickRead = attach.indexOf("const changedtick = await resolveField(scrollData, 'changedtick'")
   assert.ok(freshnessCheck > -1, 'expected freshness check in attach bridge')
@@ -1940,6 +1999,8 @@ async function main () {
   testCursorSyncUsesLightweightEvent()
   testDebouncedContentRefresh()
   testHighFrequencyLogsAreDebugOnly()
+  testTypescriptCatchesUninitializedApp()
+  testAttachDropsNotificationBeforeInit()
   await testFollowupRenderWaitsForIdleAndCancelsStaleWork()
   await testEnhancedPostRenderWaitsForIdleAndCancelsStaleWork()
   await testCodeHighlightLoadsOnlyForCodeFences()
