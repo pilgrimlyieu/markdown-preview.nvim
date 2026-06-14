@@ -213,35 +213,10 @@ exports.run = function () {
     // update vim variable
     update_clients_active_var();
 
-    const buffers = await plugin.nvim.buffers
-    for (const buffer of buffers) {
-      if (buffer.id === Number(bufnr)) {
-        const winline = await plugin.nvim.call('winline')
-        const currentWindow = await plugin.nvim.window
-        const winheight = await plugin.nvim.call('winheight', currentWindow.id)
-        const cursor = await plugin.nvim.call('getpos', '.')
-        const options = await plugin.nvim.getVar('mkdp_preview_options')
-        const pageTitle = await plugin.nvim.getVar('mkdp_page_title')
-        const theme = await plugin.nvim.getVar('mkdp_theme')
-        const name = await buffer.name
-        const content = await buffer.getLines()
-        const changedtick = await plugin.nvim.call('getbufvar', [buffer.id, 'changedtick'])
-        const currentBuffer = await plugin.nvim.buffer
-        sendToClient(client, 'refresh_content', {
-          options,
-          isActive: currentBuffer.id === buffer.id,
-          winline,
-          winheight,
-          cursor,
-          pageTitle,
-          theme,
-          name,
-          content,
-          changedtick
-        })
-        markContentFresh({ bufnr, changedtick })
-        break
-      }
+    const initialData = await plugin.nvim.call('mkdp#rpc#preview_data', [Number(bufnr), 1])
+    if (initialData && initialData.content) {
+      sendToClient(client, 'refresh_content', initialData)
+      markContentFresh({ bufnr, changedtick: initialData.changedtick })
     }
 
     client.on('close', function () {

@@ -109,15 +109,25 @@ function! s:sync_scroll_data(bufnr) abort
         \ }
 endfunction
 
-function! s:refresh_content_data(bufnr) abort
+function! mkdp#rpc#preview_data(bufnr, include_content) abort
+  if !bufexists(a:bufnr)
+    return {}
+  endif
   let l:data = s:preview_state(a:bufnr)
   let l:data['changedtick'] = getbufvar(a:bufnr, 'changedtick')
   let l:data['pageTitle'] = get(g:, 'mkdp_page_title', '')
   let l:data['theme'] = get(g:, 'mkdp_theme', '')
   let l:data['name'] = bufname(a:bufnr)
+  if a:include_content
+    let l:data['content'] = getbufline(a:bufnr, 1, '$')
+  endif
+  return l:data
+endfunction
+
+function! s:refresh_content_data(bufnr) abort
   return {
         \ 'bufnr': a:bufnr,
-        \ 'data': l:data
+        \ 'data': mkdp#rpc#preview_data(a:bufnr, 0)
         \ }
 endfunction
 
