@@ -11,7 +11,7 @@ import katexModule from 'katex'
 
 import { createMarkdownRenderer } from '../app/src/markdown-renderer'
 import scrollToLine from '../app/src/scroll'
-import type { KatexRenderer } from '../app/src/types'
+import type { KatexRenderer, ScrollPayload } from '../app/src/types'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const require = createRequire(import.meta.url)
@@ -243,6 +243,129 @@ function assertScrollInterpolation() {
   assert.deepEqual(scrollCalls, [{ top: 400, behavior: 'smooth' }])
 }
 
+function installPreviewDom() {
+  const scrollCalls: Array<{ top: number, behavior: string }> = []
+  const listeners = new Map<string, Array<() => void>>()
+  let hidden = false
+
+  const makeElement = () => ({
+    addEventListener: () => {},
+    checked: false,
+    contentEditable: 'false',
+    dataset: {},
+    hidden: false,
+    innerHTML: '',
+    textContent: ''
+  })
+
+  const elements = new Map<string, unknown>([
+    ['main', makeElement()],
+    ['#page-ctn', makeElement()],
+    ['#page-header', makeElement()],
+    ['#page-title-name', makeElement()],
+    ['#toggle-theme', makeElement()],
+    ['#theme', makeElement()],
+    ['#markdown-body', makeElement()]
+  ])
+
+  const documentElement = {
+    clientHeight: 200,
+    scrollHeight: 2000,
+    scrollTop: 0
+  }
+
+  const document = {
+    body: { scrollTop: 0 },
+    documentElement,
+    scrollingElement: documentElement,
+    get hidden() {
+      return hidden
+    },
+    addEventListener: (event: string, callback: () => void) => {
+      const callbacks = listeners.get(event) || []
+      callbacks.push(callback)
+      listeners.set(event, callbacks)
+    },
+    querySelector: (selector: string) => elements.get(selector) || null,
+    querySelectorAll: (selector: string) => {
+      assert.equal(selector, '[data-source-line]')
+      return [
+        makeAnchor(0, 0),
+        makeAnchor(100, 1000)
+      ]
+    }
+  }
+
+  Object.assign(globalThis, {
+    window: {
+      matchMedia: () => ({ matches: false }),
+      pageYOffset: 0,
+      requestAnimationFrame: (callback: () => void) => Number(setTimeout(callback, 0)),
+      scrollTo: (options: { top: number, behavior: string }) => {
+        scrollCalls.push(options)
+      }
+    },
+    document
+  })
+
+  return {
+    scrollCalls,
+    dispatchVisibility: () => {
+      for (const callback of listeners.get('visibilitychange') || []) {
+        callback()
+      }
+    },
+    setHidden: (value: boolean) => {
+      hidden = value
+    }
+  }
+}
+
+const nextTick = () => new Promise<void>(resolve => setTimeout(resolve, 0))
+
+async function assertVisibleRestoreDoesNotReplayStaleScroll() {
+  const { scrollCalls, dispatchVisibility, setHidden } = installPreviewDom()
+  const { PreviewApp } = await import('../app/src/preview-app')
+  const app = new PreviewApp() as unknown as {
+    onSyncScroll: (payload: ScrollPayload) => void
+  }
+  const payload: ScrollPayload = {
+    cursor: [0, 1, 1, 0],
+    isActive: true,
+    len: 100,
+    options: { sync_scroll_type: 'middle' },
+    winheight: 10,
+    winline: 1
+  }
+
+  scrollToLine.invalidate()
+  app.onSyncScroll(payload)
+  await nextTick()
+  assert.equal(scrollCalls.length, 1)
+
+  scrollCalls.length = 0
+  dispatchVisibility()
+  await nextTick()
+  assert.deepEqual(scrollCalls, [], 'visible preview restore should not replay stale editor scroll')
+
+  setHidden(true)
+  app.onSyncScroll({
+    ...payload,
+    cursor: [0, 21, 1, 0]
+  })
+  assert.deepEqual(scrollCalls, [], 'hidden preview should queue editor scroll without applying it')
+
+  setHidden(false)
+  dispatchVisibility()
+  await nextTick()
+  assert.equal(scrollCalls.length, 1, 'visible preview restore should apply scroll received while hidden once')
+
+  scrollCalls.length = 0
+  dispatchVisibility()
+  await nextTick()
+  assert.deepEqual(scrollCalls, [], 'queued hidden scroll should be consumed after restore')
+}
+
 function assertViteBuildOutput() {
   assert.equal(exists('app/out/index.html'), true, 'run bun run build-app before bun run test')
   assert.equal(exists('app/out/assets'), true, 'Vite assets directory is missing')
@@ -351,6 +474,7 @@ function assertBuildArtifactsIgnored() {
 const tests: Array<[string, () => void | Promise<void>]> = [
   ['markdown rendering stays functional', assertMarkdownRendering],
   ['scroll interpolates between source anchors', assertScrollInterpolation],
+  ['visible restore preserves preview scroll position', assertVisibleRestoreDoesNotReplayStaleScroll],
   ['vite build output is routed correctly', assertViteBuildOutput],
   ['server routes match Vite assets', assertServerRoutes],
   ['notifications are guarded before client work', assertNoClientGuard],

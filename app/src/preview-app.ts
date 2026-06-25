@@ -122,6 +122,7 @@ export class PreviewApp {
   private pendingHiddenRender: (() => void) | null = null
   private renderVersion = 0
   private latestScroll: ScrollPayload | null = null
+  private pendingHiddenScroll: ScrollPayload | null = null
   private rendererPromise: Promise<MarkdownRendererModule> | null = null
   private highlighterPromise: Promise<HLJSApi> | null = null
   private highlighter: HLJSApi | null = null
@@ -259,6 +260,7 @@ export class PreviewApp {
     this.renderVersion += 1
     this.cancelQueuedRender()
     this.pendingHiddenRender = null
+    this.pendingHiddenScroll = null
     return this.renderVersion
   }
 
@@ -276,13 +278,15 @@ export class PreviewApp {
 
   private flushVisibleWork() {
     const renderWork = this.pendingHiddenRender
+    const pendingScroll = this.pendingHiddenScroll
     this.pendingHiddenRender = null
+    this.pendingHiddenScroll = null
     if (renderWork) {
       renderWork()
       return
     }
-    if (this.latestScroll) {
-      this.onSyncScroll(this.latestScroll)
+    if (pendingScroll) {
+      this.onSyncScroll(pendingScroll)
     }
   }
 
@@ -419,6 +423,7 @@ export class PreviewApp {
   private onSyncScroll(scrollPayload: ScrollPayload) {
     this.latestScroll = scrollPayload
     if (this.isPreviewHidden()) {
+      this.pendingHiddenScroll = scrollPayload
       return
     }
 
@@ -460,7 +465,6 @@ export class PreviewApp {
     scrollPayload: ScrollPayload
     refreshScroll: () => void
   }) {
-    const latestScroll = this.latestScroll || scrollPayload
     const displayName = filenameWithoutExtension(name)
 
     this.nameNode.textContent = displayName
@@ -555,6 +559,7 @@ export class PreviewApp {
 
     if (!refreshContent) {
       if (this.isPreviewHidden()) {
+        this.pendingHiddenScroll = scrollPayload
         return
       }
       refreshScroll()
