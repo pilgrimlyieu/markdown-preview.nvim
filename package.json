@@ -1,0 +1,47 @@
+{
+  "name": "markdown-preview",
+  "version": "0.0.10",
+  "description": "Preview Markdown in your browser from Neovim",
+  "repository": "https://github.com/pilgrimlyieu/markdown-preview.nvim.git",
+  "author": "PilgrimLyieu <pilgrimlyieu@outlook.com>",
+  "contributors": [
+    "年糕小豆汤 <ooiss@qq.com> (original author of iamcco/markdown-preview.nvim)"
+  ],
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "clean": "rm -rf app/lib app/out",
+    "watch": "tsc -w -p ./",
+    "test": "bun scripts/test-preview-customizations.ts",
+    "typecheck": "tsc -p ./ && tsc -p ./app/tsconfig.json",
+    "build-lib": "tsc -p ./",
+    "build-app": "cd app && vite build",
+    "build-local": "bun run clean && tsc -p ./ && cd app && vite build"
+  },
+  "dependencies": {
+    "@chemzqm/neovim": "^5.7.9",
+    "@viz-js/viz": "^3.28.0",
+    "chart.js": "4.5.1",
+    "highlight.js": "11.11.1",
+    "katex": "0.17.0",
+    "log4js": "^6.4.0",
+    "markdown-it": "14.2.0",
+    "markdown-it-admon": "^1.0.1",
+    "markdown-it-anchor": "9.2.0",
+    "markdown-it-deflist": "^2.0.3",
+    "markdown-it-emoji": "^1.4.0",
+    "markdown-it-footnote": "^3.0.1",
+    "markdown-it-task-lists": "^2.1.1",
+    "markdown-it-toc-done-right": "4.2.0",
+    "md-it-meta": "^0.0.2",
+    "mermaid": "11.15.0",
+    "plantuml-encoder": "^1.4.0",
+    "ws": "^7.4.6"
+  },
+  "devDependencies": {
+    "@types/markdown-it": "14.1.2",
+    "@types/node": "24.10.0",
+    "typescript": "6.0.3",
+    "vite": "8.0.16"
+  }
+}

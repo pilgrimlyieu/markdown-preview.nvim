@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "resolveJsonModule": true,
+    "target": "es2022",
+    "module": "Node16",
+    "moduleResolution": "Node16",
+    "esModuleInterop": true,
+    "strict": true,
+    "lib": [
+      "dom",
+      "esnext"
+    ],
+    "outDir": "./app/lib",
+    "rootDir": "./src",
+    "allowSyntheticDefaultImports": true
+  },
+  "include": [
+    "./src"
+  ]
+}

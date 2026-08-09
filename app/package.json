@@ -1,0 +1,12 @@
+{
+  "name": "markdown-preview",
+  "version": "0.0.1",
+  "description": "Preview server and page for markdown-preview.nvim",
+  "repository": "https://github.com/pilgrimlyieu/markdown-preview.nvim.git",
+  "author": "PilgrimLyieu <pilgrimlyieu@outlook.com>",
+  "contributors": [
+    "年糕小豆汤 <ooiss@qq.com> (original author of iamcco/markdown-preview.nvim)"
+  ],
+  "license": "MIT",
+  "private": true
+}
