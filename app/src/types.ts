@@ -1,7 +1,13 @@
 import type MarkdownIt from 'markdown-it'
-import type { HLJSApi } from 'highlight.js'
+import type { LanguageRegistration } from 'shiki/types'
+
+export interface HighlightOptions {
+  languages?: LanguageRegistration[]
+  aliases?: Record<string, string>
+}
 
 export interface PreviewOptions {
+  highlight?: HighlightOptions
   mkit?: Record<string, unknown>
   katex?: Record<string, unknown>
   uml?: Record<string, unknown>
@@ -54,7 +60,22 @@ export interface KatexRenderer {
   renderToString: (latex: string, options?: Record<string, unknown>) => string
 }
 
-export type Highlighter = Pick<HLJSApi, 'getLanguage' | 'highlight'>
+export interface Highlighter {
+  highlight: (source: string, language: string) => string
+}
+
+export interface HighlightRequest {
+  id: number
+  source: string
+  language: string
+  options?: HighlightOptions
+}
+
+export interface HighlightResponse {
+  id: number
+  html: string
+  error?: string
+}
 
 export interface MarkdownRendererModule {
   createMarkdownRenderer: (

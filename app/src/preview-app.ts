@@ -1,5 +1,5 @@
-import type { HLJSApi } from 'highlight.js'
 import type { KatexRenderer, MarkdownRendererModule, PreviewOptions, PreviewPayload, PreviewSocket, ScrollPayload } from './types'
+import { HighlightClient } from './highlight-client'
 import createPreviewSocket from './preview-socket'
 import scrollToLine from './scroll'
 import { boolOption } from './utils'
@@ -18,16 +18,6 @@ const FLOWCHART_SCRIPTS = [
 
 const IDLE_RENDER_TIMEOUT = 500
 const ENHANCED_BLOCK_RE = /^[ \t]*(?:(?:```|~~~)[ \t]*(?:mermaid|chart|sequence-diagrams|flowchart|dot|graphviz|plantuml)\b|@startuml\b|(?:gantt|sequenceDiagram|erDiagram|graph (?:TB|BT|RL|LR|TD);?)[ \t]*$)/m
-const CODE_FENCE_RE = /^[ \t]*(?:```|~~~)[ \t]*([^`\s~]*)/gm
-const ENHANCED_FENCE_LANGS = new Set([
-  'chart',
-  'dot',
-  'flowchart',
-  'graphviz',
-  'mermaid',
-  'plantuml',
-  'sequence-diagrams'
-])
 
 const lazyScriptLoads = new Map<string, Promise<void>>()
 
@@ -38,19 +28,6 @@ const contentUsesMath = (source: string) => source.indexOf('$') !== -1
 const contentUsesMhchem = (source: string) => /\\(?:ce|pu)\s*\{/.test(source)
 
 const contentUsesEnhancedBlocks = (source: string) => ENHANCED_BLOCK_RE.test(source)
-
-const contentUsesHighlighting = (source: string) => {
-  CODE_FENCE_RE.lastIndex = 0
-  let match = CODE_FENCE_RE.exec(source)
-  while (match) {
-    const language = (match[1] || '').toLowerCase()
-    if (language && !ENHANCED_FENCE_LANGS.has(language)) {
-      return true
-    }
-    match = CODE_FENCE_RE.exec(source)
-  }
-  return false
-}
 
 function loadLazyScript(src: string) {
   const cached = lazyScriptLoads.get(src)
@@ -110,7 +87,7 @@ export class PreviewApp {
   private readonly themeInput = requireElement<HTMLInputElement>('#theme')
   private readonly contentNode = requireElement<HTMLElement>('#markdown-body')
 
-  private preContent = ''
+  private preContent: string | null = null
   private renderTimer: ReturnType<typeof setTimeout> | null = null
   private cancelIdleRender: (() => void) | null = null
   private cancelPostRender: (() => void) | null = null
@@ -119,8 +96,9 @@ export class PreviewApp {
   private latestScroll: ScrollPayload | null = null
   private pendingHiddenScroll: ScrollPayload | null = null
   private rendererPromise: Promise<MarkdownRendererModule> | null = null
-  private highlighterPromise: Promise<HLJSApi> | null = null
-  private highlighter: HLJSApi | null = null
+  private highlighter: HighlightClient | null = null
+  private highlighterOptionsKey = ''
+  private highlightFrame: number | null = null
   private katexPromise: Promise<KatexRenderer> | null = null
   private katexRenderer: KatexRenderer | null = null
   private mhchemPromise: Promise<void> | null = null
@@ -167,21 +145,6 @@ export class PreviewApp {
     return this.rendererPromise
   }
 
-  private loadHighlighter() {
-    if (!this.highlighterPromise) {
-      this.highlighterPromise = import('./highlight')
-        .then((module) => {
-          this.highlighter = module.default
-          return this.highlighter
-        })
-        .catch((error) => {
-          this.highlighterPromise = null
-          throw error
-        })
-    }
-    return this.highlighterPromise
-  }
-
   private async loadKatexRenderer(needsMhchem: boolean) {
     if (!this.katexPromise) {
       this.katexPromise = Promise.all([
@@ -219,16 +182,25 @@ export class PreviewApp {
     return this.katexRenderer && (!contentUsesMhchem(source) || this.mhchemReady)
   }
 
-  private rendererKey(options: PreviewOptions, highlighterReady: boolean, katexReady: boolean) {
+  private rendererKey(options: PreviewOptions, katexReady: boolean) {
     return JSON.stringify({
       options,
-      highlighterReady,
       katexReady
     })
   }
 
   private getMarkdownRenderer(markdownRenderer: MarkdownRendererModule, options: PreviewOptions) {
-    const key = this.rendererKey(options, Boolean(this.highlighter), Boolean(this.katexRenderer))
+    const highlighterOptionsKey = JSON.stringify(options.highlight || {})
+    if (!this.highlighter || this.highlighterOptionsKey !== highlighterOptionsKey) {
+      this.highlighter?.dispose()
+      this.highlighterOptionsKey = highlighterOptionsKey
+      this.highlighter = new HighlightClient(options.highlight || {}, (id, html, source) => {
+        this.applyCodeHighlight(id, html, source)
+      })
+      this.highlighter.setPaused(this.isPreviewHidden())
+      this.markdownRenderer = null
+    }
+    const key = this.rendererKey(options, Boolean(this.katexRenderer))
     if (!this.markdownRenderer || this.markdownRendererKey !== key) {
       this.markdownRenderer = markdownRenderer.createMarkdownRenderer(options, this.highlighter, this.katexRenderer)
       this.markdownRendererKey = key
@@ -253,6 +225,7 @@ export class PreviewApp {
 
   private invalidatePendingRender() {
     this.renderVersion += 1
+    this.highlighter?.retain(new Set())
     this.cancelQueuedRender()
     this.pendingHiddenRender = null
     this.pendingHiddenScroll = null
@@ -286,6 +259,7 @@ export class PreviewApp {
   }
 
   private handleVisibilityChange() {
+    this.highlighter?.setPaused(this.isPreviewHidden())
     if (!this.isPreviewHidden()) {
       this.flushVisibleWork()
     }
@@ -388,6 +362,7 @@ export class PreviewApp {
     }
     this.invalidatePendingRender()
     this.bufnr = bufnr
+    this.preContent = null
     this.latestScroll = null
 
     const previousSocket = this.socket
@@ -411,6 +386,10 @@ export class PreviewApp {
 
   private onClose() {
     this.invalidatePendingRender()
+    this.highlighter?.dispose()
+    this.highlighter = null
+    if (this.highlightFrame !== null) window.cancelAnimationFrame(this.highlightFrame)
+    this.highlightFrame = null
     console.log('close')
     window.close()
   }
@@ -465,6 +444,10 @@ export class PreviewApp {
     this.nameNode.textContent = displayName
     document.title = (pageTitle || '').replace(/\$\{name\}/, displayName)
     this.contentNode.innerHTML = renderedContent
+    this.highlighter?.retain(new Set(
+      [...this.contentNode.querySelectorAll<HTMLElement>('pre[data-highlight-id]')]
+        .map(node => Number(node.dataset.highlightId))
+    ))
     this.pageContainer.contentEditable = boolOption(options.content_editable) ? 'true' : 'false'
     this.header.hidden = boolOption(options.disable_filename)
     this.setTheme(theme)
@@ -473,30 +456,25 @@ export class PreviewApp {
     refreshScroll()
   }
 
-  private upgradeCodeHighlighting(
-    renderVersion: number,
-    markdownRenderer: MarkdownRendererModule,
-    options: PreviewOptions,
-    source: string,
-    applyRender: (renderedContent: string) => void
-  ) {
-    const clearPending = this.startRenderUpgrade('highlight', renderVersion)
-    if (!clearPending) {
-      return
+  private applyCodeHighlight(id: number, html: string, source: string) {
+    let changed = false
+    const nodes = this.contentNode.querySelectorAll<HTMLElement>(`pre[data-highlight-id="${id}"]`)
+    for (const node of nodes) {
+      // IDs belong to a source/language pair; checking the text also protects
+      // edits made directly in the preview while highlighting was in flight.
+      if (node.textContent === source) {
+        node.outerHTML = html
+        changed = true
+      }
     }
-    this.loadHighlighter()
-      .then(() => {
-        clearPending()
-        if (renderVersion !== this.renderVersion) {
-          return
-        }
-        const md = this.getMarkdownRenderer(markdownRenderer, options)
-        applyRender(md.render(source))
-      })
-      .catch((error) => {
-        clearPending()
-        console.error(error)
-      })
+    // Consume HTML before the client sends its next request. Only scroll work
+    // waits for a frame, so suspended frames cannot retain a second HTML cache.
+    if (!changed || this.highlightFrame !== null) return
+    this.highlightFrame = window.requestAnimationFrame(() => {
+      this.highlightFrame = null
+      scrollToLine.invalidate()
+      if (this.latestScroll) this.onSyncScroll(this.latestScroll)
+    })
   }
 
   private upgradeMathRendering(
@@ -536,7 +514,7 @@ export class PreviewApp {
     const winheight = payload.winheight || 1
     const isActive = payload.isActive !== false
     const newContent = content.join('\n')
-    const isInitialContent = this.preContent === ''
+    const isInitialContent = this.preContent === null
     const refreshContent = this.preContent !== newContent
     this.preContent = newContent
 
@@ -563,7 +541,6 @@ export class PreviewApp {
 
     const renderVersion = this.invalidatePendingRender()
     const refreshEnhancedBlocks = contentUsesEnhancedBlocks(newContent)
-    const refreshHighlightedBlocks = contentUsesHighlighting(newContent)
     const refreshMathBlocks = contentUsesMath(newContent)
 
     const applyRender = (
@@ -581,11 +558,6 @@ export class PreviewApp {
       })
       if (refreshEnhancedBlocks) {
         this.schedulePostRender(renderVersion, markdownRenderer, options)
-      }
-      if (refreshHighlightedBlocks && !this.highlighter) {
-        this.upgradeCodeHighlighting(renderVersion, markdownRenderer, options, newContent, (nextContent) => {
-          applyRender(markdownRenderer, nextContent)
-        })
       }
       if (refreshMathBlocks && !this.mathDependenciesReady(newContent)) {
         this.upgradeMathRendering(renderVersion, markdownRenderer, options, newContent, (nextContent) => {

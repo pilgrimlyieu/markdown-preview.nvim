@@ -11,6 +11,7 @@
 ---@field content_editable? boolean Make the preview page editable.
 ---@field disable_filename? boolean Hide the filename header.
 ---@field mkit? table `markdown-it` options.
+---@field highlight? table Shiki options: `languages` (TextMate grammars) and `aliases`.
 ---@field katex? table KaTeX options, e.g. `{ macros = { ... } }`.
 ---@field uml? table `markdown-it-plantuml` options.
 ---@field maid? table Mermaid options.

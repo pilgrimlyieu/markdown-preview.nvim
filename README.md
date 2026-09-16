@@ -152,6 +152,7 @@ require("markdown-preview").setup({
     disable_filename = false,
     -- Also accepted, merged into the renderer defaults when set:
     --   mkit               markdown-it options
+    --   highlight          Shiki: languages (TextMate grammars), aliases
     --   katex              KaTeX options, e.g. { macros = { ... } }
     --   uml                PlantUML options: server, imageFormat, openMarker, closeMarker
     --   maid               mermaid options
@@ -226,10 +227,65 @@ Also available:
 - Local images, resolved against the file's own directory or `images_path`
 - Task lists, footnotes, definition lists, emoji shortcodes, and `!!!`
   admonitions
-- Syntax highlighting via highlight.js
+- Syntax highlighting via [Shiki](https://shiki.style), including Lua, Rust,
+  Go, TypeScript/TSX, Python, C/C++, C#, Java, Bash, PowerShell, Vimscript,
+  TOML, Nix, Typst, Vue and the rest of its bundled languages
+- ANSI terminal output in `ansi` or `terminal` fences: 16/256/truecolor foregrounds
+  and backgrounds, bold, dim, italic, underline, strikethrough and reverse video
 
-Everything heavy — highlight.js, KaTeX, Mermaid, Chart.js, Graphviz — is
+Everything heavy — Shiki, KaTeX, Mermaid, Chart.js, Graphviz — is
 code-split and only fetched once a document actually uses it.
+
+### Code highlighting
+
+Use a language label on the fence, such as `lua`, `rust`, `js`, `tsx` or `bash`.
+Labels are case-insensitive; unknown languages and unlabelled/`text` fences
+remain plain text. Nested fences in lists and blockquotes work too.
+
+Shiki runs in a Web Worker with a reusable Oniguruma engine. The page displays
+escaped code immediately, then replaces only the blocks whose colors are ready.
+Grammars load on demand; unchanged blocks reuse an LRU cache capped at 512
+entries and 8 MiB of source plus generated HTML. Both GitHub light/dark palettes
+are emitted together, so the theme toggle does not re-tokenize code.
+Hidden previews pause further highlighting; a new document discards queued work
+from the previous one while allowing its active block to finish.
+
+To keep large logs and minified files responsive, blocks over 65,536 UTF-16 code
+units remain plain text; lines over 2,000 code units skip tokenization, with a
+10 ms tokenization budget per line. ANSI support interprets SGR styling, not
+terminal cursor movement or screen editing. It expects actual escape characters;
+this command creates a small previewable example:
+
+```sh
+printf '```ansi\n\033[1;32mOK\033[0m\n```\n' > /tmp/ansi-preview.md
+```
+
+Custom languages use [TextMate grammar JSON](https://shiki.style/guide/load-lang),
+the same format used by VS Code syntax extensions. Load the file in Neovim and
+pass its data through `render.highlight.languages`; `aliases` adds or overrides
+fence labels without changing a grammar:
+
+```lua
+local grammar = vim.json.decode(table.concat(
+  vim.fn.readfile(vim.fn.expand("~/.config/nvim/syntax/example.tmLanguage.json")),
+  "\n"
+))
+grammar.name = "example" -- the fence label
+
+require("markdown-preview").setup({
+  render = {
+    highlight = {
+      languages = { grammar },
+      aliases = { ex = "example", mylua = "lua" },
+    },
+  },
+})
+```
+
+Bundled grammars include their embedded languages. For custom grammars, list
+dependencies in `embeddedLangs` (language names or aliases) and supply any custom
+dependencies in the same `languages` array. The existing `css.highlight` override also applies to Shiki's
+`--shiki-light*` and `--shiki-dark*` CSS variables.
 
 ## FAQ
 
@@ -267,10 +323,14 @@ verbosity with `NVIM_MKDP_LOG_LEVEL=debug`.
 bun run typecheck   # tsc over the server and the page
 bun run build-local # clean, then build app/lib and app/out
 bun run test        # render, route, config and Neovim integration tests
+bun run test:browser # worker, lazy grammar loading, themes and live refresh (Firefox)
 ```
 
 `build-local` cleans first on purpose: `tsc` never removes stale output, so a
 deleted source would otherwise linger in `app/lib` and still be loadable.
+
+The browser test needs Playwright's Firefox installed once with
+`bunx playwright-core install firefox`.
 
 `nvim -u test/init.lua test/test.md` opens a scratch Neovim with the plugin
 loaded, for trying changes by hand.
@@ -302,7 +362,7 @@ the server — is what opens the browser.
 [markdown-preview.nvim][upstream] by 年糕小豆汤, MIT licensed, along with
 everything it builds on: [markdown-it](https://github.com/markdown-it/markdown-it)
 and its plugin ecosystem, [markdown.css](https://github.com/iamcco/markdown.css),
-[KaTeX](https://github.com/KaTeX/KaTeX), [highlight.js](https://github.com/highlightjs/highlight.js),
+[KaTeX](https://github.com/KaTeX/KaTeX), [Shiki](https://github.com/shikijs/shiki),
 [Mermaid](https://github.com/mermaid-js/mermaid), [Chart.js](https://github.com/chartjs/Chart.js),
 [viz.js](https://github.com/mdaines/viz-js), [flowchart.js](https://github.com/adrai/flowchart.js),
 [js-sequence-diagrams](https://github.com/bramp/js-sequence-diagrams),

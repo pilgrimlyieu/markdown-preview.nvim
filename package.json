@@ -12,7 +12,8 @@
   "scripts": {
     "clean": "rm -rf app/lib app/out",
     "watch": "tsc -w -p ./",
-    "test": "bun scripts/test-preview-customizations.ts",
+    "test": "bun scripts/test-highlighting.ts && bun scripts/test-preview-customizations.ts",
+    "test:browser": "bun scripts/test-highlighting-browser.ts",
     "typecheck": "tsc -p ./ && tsc -p ./app/tsconfig.json",
     "build-lib": "tsc -p ./",
     "build-app": "cd app && vite build",
@@ -22,7 +23,6 @@
     "@chemzqm/neovim": "^5.7.9",
     "@viz-js/viz": "^3.28.0",
     "chart.js": "4.5.1",
-    "highlight.js": "11.11.1",
     "katex": "0.17.0",
     "log4js": "^6.4.0",
     "markdown-it": "14.2.0",
@@ -36,11 +36,13 @@
     "md-it-meta": "^0.0.2",
     "mermaid": "11.15.0",
     "plantuml-encoder": "^1.4.0",
+    "shiki": "4.4.3",
     "ws": "^7.4.6"
   },
   "devDependencies": {
     "@types/markdown-it": "14.1.2",
     "@types/node": "24.10.0",
+    "playwright-core": "1.62.1",
     "typescript": "6.0.3",
     "vite": "8.0.16"
   }
