@@ -8,8 +8,8 @@ function plantumlUrl (umlCode: string, element: Element) {
   return `${server}/${imageFormat}/${plantumlEncoder.encode(umlCode)}`
 }
 
-export default function renderPlantumlBlocks () {
-  document.querySelectorAll('.plantuml-diagram').forEach((element) => {
+export default function renderPlantumlBlocks (nodes: Iterable<HTMLElement>) {
+  for (const element of nodes) {
     try {
       const image = document.createElement('img')
       image.src = plantumlUrl(element.textContent || '', element)
@@ -18,5 +18,5 @@ export default function renderPlantumlBlocks () {
     } catch (e) {
       replaceWithRenderError(element, 'PlantUML', e)
     }
-  })
+  }
 }

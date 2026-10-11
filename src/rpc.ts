@@ -23,3 +23,6 @@ export const previewPayload = async (
   bufnr: BufferId,
   includeContent: boolean
 ) => await invoke(nvim, 'payload', [Number(bufnr), includeContent]) as PreviewPayload
+
+export const previewDocument = async (nvim: NeovimClient, bufnr: BufferId, filename: string) =>
+  await invoke(nvim, 'document', [Number(bufnr), filename]) as { path: string | null, payload: PreviewPayload }

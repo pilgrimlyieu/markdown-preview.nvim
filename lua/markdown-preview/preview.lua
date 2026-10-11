@@ -231,7 +231,7 @@ end
 function M.refocus()
   local bufnr = vim.api.nvim_get_current_buf()
   if server.channel(bufnr) and vim.g.mkdp_clients_active then
-    server.notify(bufnr, "open_browser", { bufnr = bufnr })
+    M.open(bufnr)
   end
 end
 

@@ -1,6 +1,7 @@
 import type { KatexRenderer, MarkdownRendererModule, PreviewOptions, PreviewPayload, PreviewSocket, ScrollPayload } from './types'
 import { HighlightClient } from './highlight-client'
 import createPreviewSocket from './preview-socket'
+import { PreviewNavigation } from './preview-navigation'
 import scrollToLine from './scroll'
 import { boolOption } from './utils'
 
@@ -17,17 +18,12 @@ const FLOWCHART_SCRIPTS = [
 ]
 
 const IDLE_RENDER_TIMEOUT = 500
-const ENHANCED_BLOCK_RE = /^[ \t]*(?:(?:```|~~~)[ \t]*(?:mermaid|chart|sequence-diagrams|flowchart|dot|graphviz|plantuml)\b|@startuml\b|(?:gantt|sequenceDiagram|erDiagram|graph (?:TB|BT|RL|LR|TD);?)[ \t]*$)/m
 
 const lazyScriptLoads = new Map<string, Promise<void>>()
-
-const hasElement = (selector: string) => document.querySelector(selector) !== null
 
 const contentUsesMath = (source: string) => source.indexOf('$') !== -1
 
 const contentUsesMhchem = (source: string) => /\\(?:ce|pu)\s*\{/.test(source)
-
-const contentUsesEnhancedBlocks = (source: string) => ENHANCED_BLOCK_RE.test(source)
 
 function loadLazyScript(src: string) {
   const cached = lazyScriptLoads.get(src)
@@ -106,8 +102,10 @@ export class PreviewApp {
   private markdownRendererKey = ''
   private markdownRenderer: ReturnType<MarkdownRendererModule['createMarkdownRenderer']> | null = null
   private pendingRenderUpgrades: Record<string, number | null> = {}
+  private enhancedDisposers: Array<() => void> = []
   private bufnr = -1
   private socket: PreviewSocket | null = null
+  private navigation: PreviewNavigation | null = null
   private theme = ''
 
   constructor() {
@@ -126,12 +124,14 @@ export class PreviewApp {
   }
 
   start() {
-    this.startSocket(this.bufnrFromLocation())
-  }
-
-  private bufnrFromLocation() {
-    const match = window.location.pathname.match(/(\d+)$/)
-    return match ? Number(match[1]) : 0
+    this.navigation = new PreviewNavigation(this.contentNode, {
+      connect: bufnr => this.startSocket(bufnr),
+      render: (payload, newDocument) => {
+        if (newDocument) this.preContent = null
+        this.onRefreshContent(payload)
+      }
+    })
+    this.navigation.start()
   }
 
   private loadMarkdownRenderer() {
@@ -281,7 +281,9 @@ export class PreviewApp {
       if (renderVersion !== this.renderVersion) {
         return
       }
-      this.renderEnhancedBlocks(markdownRenderer, options).catch(console.error)
+      this.renderEnhancedBlocks(markdownRenderer, options, renderVersion).then(() => {
+        if (renderVersion === this.renderVersion) this.navigation?.afterRender()
+      }).catch(console.error)
     })
   }
 
@@ -297,13 +299,20 @@ export class PreviewApp {
     }
   }
 
-  private async renderEnhancedBlocks(markdownRenderer: MarkdownRendererModule, options: PreviewOptions) {
+  private async renderEnhancedBlocks(markdownRenderer: MarkdownRendererModule, options: PreviewOptions, version: number) {
     const tasks: Array<Promise<unknown>> = []
+    // A source version can replace its DOM more than once (for example after
+    // KaTeX loads). Capture nodes now and check their membership after awaiting.
+    const current = <T extends HTMLElement>(nodes: Iterable<T>) => version === this.renderVersion
+      ? [...nodes].filter(node => this.contentNode.contains(node))
+      : []
 
-    const mermaidNodes = document.querySelectorAll<HTMLElement>('.mermaid')
+    const mermaidNodes = this.contentNode.querySelectorAll<HTMLElement>('.mermaid')
     if (mermaidNodes.length) {
       tasks.push(
         import('mermaid').then((module) => {
+          const nodes = current(mermaidNodes)
+          if (!nodes.length) return
           const mermaid = module.default
           const mermaidTheme = this.theme === 'dark' ? 'dark' : 'default'
           const mermaidConfig = {
@@ -314,27 +323,41 @@ export class PreviewApp {
           mermaid.initialize({
             ...mermaidConfig
           })
-          return mermaid.run({ nodes: mermaidNodes, suppressErrors: true })
+          return mermaid.run({ nodes, suppressErrors: true })
         })
       )
     }
-    if (hasElement('.chartjs')) {
-      tasks.push(import('./chart-renderer').then((module) => module.default()))
+    const charts = this.contentNode.querySelectorAll<HTMLCanvasElement>('canvas.chartjs')
+    if (charts.length) {
+      tasks.push(import('./chart-renderer').then((module) => {
+        const dispose = module.default(current(charts))
+        if (dispose) this.enhancedDisposers.push(dispose)
+      }))
     }
-    if (hasElement('.plantuml-diagram')) {
-      tasks.push(import('./plantuml-renderer').then((module) => module.default()))
+    const plantuml = this.contentNode.querySelectorAll<HTMLElement>('.plantuml-diagram')
+    if (plantuml.length) {
+      tasks.push(import('./plantuml-renderer').then((module) => module.default(current(plantuml))))
     }
-    if (hasElement('.sequence-diagrams')) {
-      tasks.push(loadLazyScripts(SEQUENCE_DIAGRAM_SCRIPTS).then(markdownRenderer.renderDiagram))
+    const sequences = this.contentNode.querySelectorAll<HTMLElement>('.sequence-diagrams')
+    if (sequences.length) {
+      tasks.push(loadLazyScripts(SEQUENCE_DIAGRAM_SCRIPTS).then(() => markdownRenderer.renderDiagram(current(sequences))))
     }
-    if (hasElement('div.flowchart')) {
-      tasks.push(loadLazyScripts(FLOWCHART_SCRIPTS).then(markdownRenderer.renderFlowchart))
+    const flowcharts = this.contentNode.querySelectorAll<HTMLElement>('div.flowchart')
+    if (flowcharts.length) {
+      tasks.push(loadLazyScripts(FLOWCHART_SCRIPTS).then(() => markdownRenderer.renderFlowchart(current(flowcharts))))
     }
-    if (hasElement('.dot')) {
-      tasks.push(markdownRenderer.renderDot())
+    const dots = this.contentNode.querySelectorAll<HTMLElement>('.dot')
+    if (dots.length) {
+      tasks.push(markdownRenderer.renderDot(dots))
     }
 
     await Promise.all(tasks)
+  }
+
+  private clearEnhancedBlocks() {
+    for (const dispose of this.enhancedDisposers.splice(0)) {
+      try { dispose() } catch (error) { console.error(error) }
+    }
   }
 
   private setTheme(theme: string) {
@@ -366,18 +389,24 @@ export class PreviewApp {
     this.latestScroll = null
 
     const previousSocket = this.socket
-    window.history.replaceState(null, '', `/page/${bufnr}`)
-
     const socket = createPreviewSocket(bufnr)
     this.socket = socket
 
     socket.on('connect', () => console.log('connect success'))
     socket.on('disconnect', () => console.log('disconnect'))
-    socket.on('close', () => this.onClose())
-    socket.on('refresh_content', (payload) => this.onRefreshContent(payload as PreviewPayload))
-    socket.on('sync_scroll', (payload) => this.onSyncScroll(payload as ScrollPayload))
-    socket.on('close_page', () => this.onClose())
-    socket.on('change_bufnr', (nextBufnr) => this.startSocket(Number(nextBufnr)))
+    socket.on('close', () => { if (this.socket === socket) this.onClose() })
+    socket.on('refresh_content', (payload) => {
+      if (this.socket === socket) this.navigation?.receiveSource(payload as PreviewPayload)
+    })
+    socket.on('sync_scroll', (payload) => {
+      if (this.socket === socket && this.navigation?.resumeEditorScroll()) {
+        this.onSyncScroll(payload as ScrollPayload)
+      }
+    })
+    socket.on('close_page', () => { if (this.socket === socket) this.onClose() })
+    socket.on('change_bufnr', (nextBufnr) => {
+      if (this.socket === socket) this.navigation?.followBuffer(Number(nextBufnr))
+    })
 
     if (previousSocket) {
       previousSocket.close()
@@ -386,6 +415,10 @@ export class PreviewApp {
 
   private onClose() {
     this.invalidatePendingRender()
+    this.clearEnhancedBlocks()
+    this.navigation?.dispose()
+    this.socket?.close()
+    this.socket = null
     this.highlighter?.dispose()
     this.highlighter = null
     if (this.highlightFrame !== null) window.cancelAnimationFrame(this.highlightFrame)
@@ -395,6 +428,7 @@ export class PreviewApp {
   }
 
   private onSyncScroll(scrollPayload: ScrollPayload) {
+    if (this.navigation && !this.navigation.canSyncScroll) return
     this.latestScroll = scrollPayload
     if (this.isPreviewHidden()) {
       this.pendingHiddenScroll = scrollPayload
@@ -428,7 +462,6 @@ export class PreviewApp {
     pageTitle,
     theme,
     options,
-    scrollPayload,
     refreshScroll
   }: {
     renderedContent: string
@@ -436,14 +469,19 @@ export class PreviewApp {
     pageTitle: string
     theme: string
     options: PreviewOptions
-    scrollPayload: ScrollPayload
     refreshScroll: () => void
   }) {
     const displayName = filenameWithoutExtension(name)
 
     this.nameNode.textContent = displayName
     document.title = (pageTitle || '').replace(/\$\{name\}/, displayName)
-    this.contentNode.innerHTML = renderedContent
+    const template = document.createElement('template')
+    template.innerHTML = renderedContent
+    // Resolve resources while detached, before the browser can request them
+    // against the previous document's URL or directory.
+    this.navigation?.prepareContent(template.content)
+    this.clearEnhancedBlocks()
+    this.contentNode.replaceChildren(template.content)
     this.highlighter?.retain(new Set(
       [...this.contentNode.querySelectorAll<HTMLElement>('pre[data-highlight-id]')]
         .map(node => Number(node.dataset.highlightId))
@@ -454,6 +492,7 @@ export class PreviewApp {
 
     scrollToLine.invalidate()
     refreshScroll()
+    this.navigation?.afterRender()
   }
 
   private applyCodeHighlight(id: number, html: string, source: string) {
@@ -474,6 +513,7 @@ export class PreviewApp {
       this.highlightFrame = null
       scrollToLine.invalidate()
       if (this.latestScroll) this.onSyncScroll(this.latestScroll)
+      this.navigation?.restoreViewport()
     })
   }
 
@@ -540,7 +580,6 @@ export class PreviewApp {
     }
 
     const renderVersion = this.invalidatePendingRender()
-    const refreshEnhancedBlocks = contentUsesEnhancedBlocks(newContent)
     const refreshMathBlocks = contentUsesMath(newContent)
 
     const applyRender = (
@@ -553,12 +592,9 @@ export class PreviewApp {
         pageTitle,
         theme,
         options,
-        scrollPayload,
         refreshScroll
       })
-      if (refreshEnhancedBlocks) {
-        this.schedulePostRender(renderVersion, markdownRenderer, options)
-      }
+      this.schedulePostRender(renderVersion, markdownRenderer, options)
       if (refreshMathBlocks && !this.mathDependenciesReady(newContent)) {
         this.upgradeMathRendering(renderVersion, markdownRenderer, options, newContent, (nextContent) => {
           applyRender(markdownRenderer, nextContent)

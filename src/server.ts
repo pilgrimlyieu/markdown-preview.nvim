@@ -243,7 +243,7 @@ export function run() {
       const initialData = await previewPayload(plugin.nvim, bufnr, true)
       if (initialData && initialData.content) {
         sendToClient(client, 'refresh_content', initialData)
-        markContentFresh({ bufnr, changedtick: initialData.changedtick })
+        // This snapshot says nothing about the content in already open tabs.
       }
     } catch (err) {
       logger.error('initial content load failed: ', err)
@@ -329,8 +329,9 @@ export function run() {
     await openBrowser({ bufnr: startBufnr })
   }
 
-  startServer().catch((err: Error) => {
+  startServer().catch(async (err: Error) => {
     logger.error('start server failed: ', err)
-    echoError(plugin.nvim, ['the preview server failed to start', `${err}`])
+    await echoError(plugin.nvim, ['the preview server failed to start', `${err}`])
+    process.exit(1)
   })
 }

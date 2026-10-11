@@ -1,10 +1,10 @@
-import { execSync } from 'child_process'
 import fs from 'fs'
 import http from 'http'
 import path from 'path'
 
 import { PreviewPlugin } from './app-contract'
 import { asString, getConfig } from './config'
+import { readLocalDocument, resolveLocalFile } from './local-files'
 import createLogger from './util/logger'
 
 const logger = createLogger('app/routes')
@@ -44,9 +44,11 @@ const CONTENT_TYPES: Record<string, string> = {
   '.map': 'application/json; charset=utf-8',
   '.mjs': 'text/javascript; charset=utf-8',
   '.otf': 'font/otf',
+  '.pdf': 'application/pdf',
   '.png': 'image/png',
   '.svg': 'image/svg+xml',
   '.ttf': 'font/ttf',
+  '.txt': 'text/plain; charset=utf-8',
   '.wasm': 'application/wasm',
   '.webp': 'image/webp',
   '.woff': 'font/woff',
@@ -76,33 +78,59 @@ const isFresh = (req: PreviewRequest, stat: fs.Stats, etag: string) => {
   return false
 }
 
-const sendFile = (
+const fileErrorStatus = (error: unknown) => {
+  const code = (error as NodeJS.ErrnoException)?.code || ''
+  if (['EACCES', 'EPERM'].includes(code)) return 403
+  if (['ENOENT', 'ENOTDIR', 'EISDIR'].includes(code)) return 404
+  if (['EINVAL', 'ERR_INVALID_ARG_VALUE'].includes(code)) return 400
+  return 500
+}
+
+const sendFileError = (res: http.ServerResponse, error: unknown) => {
+  if (res.destroyed) return
+  if (res.headersSent) return res.destroy()
+  res.statusCode = fileErrorStatus(error)
+  res.removeHeader('Content-Disposition')
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8')
+  res.setHeader('Cache-Control', CACHE_POLICIES.noStore)
+  res.end(http.STATUS_CODES[res.statusCode])
+}
+
+const sendFile = async (
   req: PreviewRequest,
   res: http.ServerResponse,
   fpath: string,
   cacheControl = CACHE_POLICIES.revalidate
 ) => {
-  const contentType = contentTypeFor(fpath)
-  if (contentType && !res.hasHeader('Content-Type')) {
-    res.setHeader('Content-Type', contentType)
+  let file: Awaited<ReturnType<typeof fs.promises.open>> | undefined
+  try {
+    file = await fs.promises.open(fpath, 'r')
+    const stat = await file.stat()
+    if (!stat.isFile()) throw Object.assign(new Error('Not a file'), { code: 'EISDIR' })
+    const contentType = contentTypeFor(fpath)
+    if (contentType && !res.hasHeader('Content-Type')) res.setHeader('Content-Type', contentType)
+    res.setHeader('Cache-Control', cacheControl)
+    if (cacheControl !== CACHE_POLICIES.noStore) {
+      const etag = weakEtag(stat)
+      res.setHeader('ETag', etag)
+      res.setHeader('Last-Modified', stat.mtime.toUTCString())
+      if (isFresh(req, stat, etag)) {
+        res.statusCode = 304
+        res.end()
+        return
+      }
+    }
+    if (res.destroyed) return
+    const stream = file.createReadStream()
+    file = undefined // The stream now owns and closes the descriptor.
+    stream.once('error', error => sendFileError(res, error))
+    res.once('close', () => stream.destroy())
+    stream.pipe(res)
+  } catch (error) {
+    sendFileError(res, error)
+  } finally {
+    await file?.close()
   }
-  res.setHeader('Cache-Control', cacheControl)
-  if (cacheControl === CACHE_POLICIES.noStore) {
-    return fs.createReadStream(fpath).pipe(res)
-  }
-
-  const stat = fs.statSync(fpath)
-  const etag = weakEtag(stat)
-
-  res.setHeader('ETag', etag)
-  res.setHeader('Last-Modified', stat.mtime.toUTCString())
-
-  if (isFresh(req, stat, etag)) {
-    res.statusCode = 304
-    return res.end()
-  }
-
-  return fs.createReadStream(fpath).pipe(res)
 }
 
 const use = (route: Route) => {
@@ -110,10 +138,35 @@ const use = (route: Route) => {
 }
 
 use((req, res, next) => {
-  if (/\/page\/\d+/.test(req.asPath)) {
+  if (/^\/page\/\d+$/.test(req.asPath)) {
     return sendFile(req, res, path.join(OUT_DIR, 'index.html'), CACHE_POLICIES.noStore)
   }
   next()
+})
+
+use(async (req, res, next) => {
+  const match = req.asPath.match(/^\/(api\/document|file)\/(\d+)$/)
+  if (!match) return next()
+  const [, kind, bufnr] = match
+  const filename = new URL(req.url || '', 'http://localhost').searchParams.get('path') || ''
+  res.setHeader('Cache-Control', CACHE_POLICIES.noStore)
+  try {
+    if (kind === 'api/document') {
+      const document = await readLocalDocument(req.plugin.nvim, bufnr, filename)
+      res.setHeader('Content-Type', 'application/json; charset=utf-8')
+      return res.end(JSON.stringify(document))
+    }
+    const resolved = await resolveLocalFile(req.plugin.nvim, bufnr, filename)
+    res.setHeader('Content-Type', contentTypeFor(resolved) || 'application/octet-stream')
+    const basename = encodeURIComponent(path.basename(resolved)).replace(/['()*]/g,
+      char => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)
+    res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${basename}`)
+    return sendFile(req, res, resolved, CACHE_POLICIES.noStore)
+  } catch (error) {
+    res.statusCode = fileErrorStatus(error)
+    res.setHeader('Content-Type', 'application/json; charset=utf-8')
+    return res.end(JSON.stringify({ error: `Cannot open local file: ${filename}` }))
+  }
 })
 
 use((req, res, next) => {
@@ -163,48 +216,21 @@ use((req, res, next) => {
 })
 
 use(async (req, res, next) => {
-  logger.debug('image route: ', req.asPath)
-  const reg = /^\/_local_image_/
-  if (reg.test(req.asPath) && req.asPath !== '') {
-    const buffers = await req.plugin.nvim.buffers
-    const buffer = buffers.find(candidate => candidate.id === Number(req.bufnr))
-    if (buffer) {
-      const { images_path: imagesPath } = await getConfig(req.plugin.nvim)
-      let fileDir = asString(imagesPath) || asString(await req.plugin.nvim.call('expand', `#${req.bufnr}:p:h`))
-
-      logger.debug('fileDir', fileDir)
-
-      if (process.env.MINGW_HOME && !fileDir.includes(':')) {
-        const cmd = `cygpath.exe -w -a ${fileDir}`
-        logger.debug('cmd', cmd)
-        fileDir = execSync(cmd).toString('utf8').replace('\n', '')
-        logger.debug('New fileDir', fileDir)
-      }
-
-      let imgPath = decodeURIComponent(decodeURIComponent(req.asPath.replace(reg, '')))
-      imgPath = imgPath.replace(/\\ /g, ' ')
-      if (imgPath[0] !== '/' && imgPath[0] !== '\\') {
-        imgPath = path.join(fileDir, imgPath)
-      } else if (!fs.existsSync(imgPath)) {
-        let tmpDirPath = fileDir
-        while (tmpDirPath !== '/' && tmpDirPath !== '\\') {
-          tmpDirPath = path.normalize(path.join(tmpDirPath, '..'))
-          const tmpImgPath = path.join(tmpDirPath, imgPath)
-          if (fs.existsSync(tmpImgPath)) {
-            imgPath = tmpImgPath
-            break
-          }
-        }
-      }
-      logger.debug('imgPath', imgPath)
-
-      if (fs.existsSync(imgPath) && !fs.statSync(imgPath).isDirectory()) {
-        return sendFile(req, res, imgPath)
-      }
-      logger.error('image not exists: ', imgPath)
-    }
+  const prefix = '/_local_image_'
+  if (!req.asPath.startsWith(prefix)) return next()
+  try {
+    // prepareLinks has separated the source URI into a filename and suffixes.
+    const filename = decodeURIComponent(req.asPath.slice(prefix.length))
+    const { images_path: imagesPath } = await getConfig(req.plugin.nvim)
+    const document = new URL(req.url || '', 'http://localhost').searchParams.get('document')
+    const resolved = await resolveLocalFile(req.plugin.nvim, req.bufnr, filename, {
+      document, imagesPath: asString(imagesPath)
+    })
+    return sendFile(req, res, resolved)
+  } catch (error) {
+    if (error instanceof URIError || [400, 404].includes(fileErrorStatus(error))) return next()
+    return sendFileError(res, error)
   }
-  next()
 })
 
 use((req, res) => {

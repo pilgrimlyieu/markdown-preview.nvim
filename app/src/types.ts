@@ -31,6 +31,7 @@ export interface PreviewPayload {
   theme?: string
   name?: string
   content?: string[]
+  changedtick?: number
 }
 
 export interface ScrollPayload {
@@ -83,7 +84,7 @@ export interface MarkdownRendererModule {
     highlighter?: Highlighter | null,
     katexRenderer?: KatexRenderer | null
   ) => MarkdownIt
-  renderDiagram: () => void
-  renderFlowchart: () => void
-  renderDot: () => Promise<void>
+  renderDiagram: (nodes: Iterable<HTMLElement>) => void
+  renderFlowchart: (nodes: Iterable<HTMLElement>) => void
+  renderDot: (nodes: Iterable<HTMLElement>) => Promise<void>
 }

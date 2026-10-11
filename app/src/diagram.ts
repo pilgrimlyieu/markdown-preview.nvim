@@ -1,5 +1,6 @@
 import type MarkdownIt from 'markdown-it'
 import { getFenceRenderer } from './markdown-it-utils'
+import { escape } from './utils'
 
 let diagramOptions: Record<string, unknown> = {}
 
@@ -11,7 +12,7 @@ const diagram = (md: MarkdownIt, opts: Record<string, unknown> = {}) => {
     try {
       if (token.info && token.info.trim() === 'sequence-diagrams') {
         const code = token.content.trim()
-        return `<div class="sequence-diagrams">${code}</div>`
+        return `<div class="sequence-diagrams">${escape(code)}</div>`
       }
     } catch (e) {
       console.error(`Parse Diagram Error: `, e)
@@ -20,12 +21,11 @@ const diagram = (md: MarkdownIt, opts: Record<string, unknown> = {}) => {
   }
 }
 
-export const renderDiagram = () => {
-  const list = document.querySelectorAll('.sequence-diagrams')
-  if (!window.Diagram || !list.length) {
+export const renderDiagram = (nodes: Iterable<HTMLElement>) => {
+  if (!window.Diagram) {
     return
   }
-  list.forEach(item => {
+  for (const item of nodes) {
     try {
       const d = window.Diagram!.parse(item.textContent)
       item.className = ''
@@ -37,7 +37,7 @@ export const renderDiagram = () => {
     } catch (e) {
       console.error(`Parse Sequence-diagrams Error: ${e}`)
     }
-  })
+  }
 }
 
 export default diagram

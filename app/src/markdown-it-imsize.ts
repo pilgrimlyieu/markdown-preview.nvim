@@ -148,6 +148,7 @@ function imageWithSize(md: MarkdownIt): RuleInline {
         token.attrs = [['src', href], ['alt', '']]
         token.children = []
         token.content = content
+        state.md.inline.parse(content, state.md, state.env, token.children)
         token.markup = state.src.slice(oldPos, pos)
         token.info = ''
 

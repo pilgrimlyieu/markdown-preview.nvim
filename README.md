@@ -236,6 +236,28 @@ Also available:
 Everything heavy — Shiki, KaTeX, Mermaid, Chart.js, Graphviz — is
 code-split and only fetched once a document actually uses it.
 
+### Following links
+
+- Heading, table-of-contents and footnote links stay on the current page.
+  Fragments also work when opening a preview URL directly.
+- External web links open a new tab. Local attachments open in another tab or
+  download according to their type; explicit HTML `target` and `download`
+  attributes are respected.
+- Local `.md`, `.markdown`, `.mdown` and `.mkd` links open in the current preview.
+  Relative paths, `..` and `#heading` fragments resolve from the document being
+  read. Images use that document's directory unless `images_path` is configured.
+  Browser back and forward restore the previous document and reading position.
+
+Paths starting with `/` first try the filesystem path, then the document's
+directory and its parents. Images and attachment links use the same rule.
+An unnamed buffer uses Neovim's current directory for relative paths.
+
+Following a local link leaves Neovim's current buffer and cursor alone. Linked
+documents are snapshots loaded when opened or reloaded: an already loaded
+buffer supplies its unsaved text; otherwise the file is read from disk. The
+original preview stays connected in the background. Returning to it resumes
+live updates, while a missing file shows a message without replacing the page.
+
 ### Code highlighting
 
 Use a language label on the fence, such as `lua`, `rust`, `js`, `tsx` or `bash`.
@@ -323,7 +345,9 @@ verbosity with `NVIM_MKDP_LOG_LEVEL=debug`.
 bun run typecheck   # tsc over the server and the page
 bun run build-local # clean, then build app/lib and app/out
 bun run test        # render, route, config and Neovim integration tests
-bun run test:browser # worker, lazy grammar loading, themes and live refresh (Firefox)
+bun run test:browser # highlighting, links and rendering (Firefox and Neovim)
+bun run test:links   # link navigation against a real Neovim preview server
+bun run test:preview # escaping, delayed diagrams and scroll restoration
 ```
 
 `build-local` cleans first on purpose: `tsc` never removes stale output, so a

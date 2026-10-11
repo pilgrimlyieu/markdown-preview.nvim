@@ -64,7 +64,10 @@ function M.start(bufnr)
         util.error(lines)
       end
     end,
-    on_exit = function()
+    on_exit = function(job)
+      if channels[owner] ~= job then
+        return
+      end
       channels[owner] = nil
       require("markdown-preview.preview").on_server_exit(owner)
     end,

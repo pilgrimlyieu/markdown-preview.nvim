@@ -11,7 +11,6 @@ import mk from './katex'
 import { chartPlugin } from './chart'
 import mkitMermaid from './mermaid'
 import linenumbers from './linenumbers'
-import image from './image'
 import diagram, { renderDiagram } from './diagram'
 import flowchart, { renderFlowchart } from './flowchart'
 import dot, { renderDot } from './dot'
@@ -107,7 +106,6 @@ export function createMarkdownRenderer (
     .use(taskLists)
     .use(markdownDeflist)
     .use(footnote)
-    .use(image)
     .use(markdownImSize)
     .use(markdownAdmonition)
     .use(linenumbers)

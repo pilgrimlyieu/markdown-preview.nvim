@@ -1,5 +1,6 @@
 import type MarkdownIt from 'markdown-it'
 import { getFenceRenderer } from './markdown-it-utils'
+import { escape } from './utils'
 
 let flowchartOptions: Record<string, unknown> = {}
 
@@ -11,7 +12,7 @@ const flowchart = (md: MarkdownIt, opts: Record<string, unknown> = {}) => {
     try {
       if (token.info && token.info.trim() === 'flowchart') {
         const code = token.content.trim()
-        return `<div class="flowchart">${code}</div>`
+        return `<div class="flowchart">${escape(code)}</div>`
       }
     } catch (e) {
       console.error(`Parse flowchart Error: `, e)
@@ -20,12 +21,11 @@ const flowchart = (md: MarkdownIt, opts: Record<string, unknown> = {}) => {
   }
 }
 
-export const renderFlowchart = () => {
-  const list = document.querySelectorAll('div.flowchart')
-  if (!window.flowchart || !list.length) {
+export const renderFlowchart = (nodes: Iterable<HTMLElement>) => {
+  if (!window.flowchart) {
     return
   }
-  list.forEach(item => {
+  for (const item of nodes) {
     try {
       const d = window.flowchart!.parse(item.textContent)
       item.className = ''
@@ -34,7 +34,7 @@ export const renderFlowchart = () => {
     } catch (e) {
       console.error(`Parse flowchart Error: ${e}`)
     }
-  })
+  }
 }
 
 export default flowchart

@@ -1,5 +1,6 @@
 import type MarkdownIt from 'markdown-it'
 import { getFenceRenderer } from './markdown-it-utils'
+import { escape } from './utils'
 
 const chartPlugin = (md: MarkdownIt) => {
   const renderFence = getFenceRenderer(md)
@@ -9,9 +10,9 @@ const chartPlugin = (md: MarkdownIt) => {
       const code = token.content.trim()
       try {
         const json = JSON.parse(code)
-        return `<canvas class="chartjs">${JSON.stringify(json)}</canvas>`
+        return `<canvas class="chartjs">${escape(JSON.stringify(json))}</canvas>`
       } catch (e) { // JSON.parse exception
-        return `<pre>${e}</pre>`
+        return `<pre>${escape(String(e))}</pre>`
       }
     }
     return renderFence(tokens, idx, options, env, slf)
@@ -22,6 +23,3 @@ export {
   chartPlugin
 }
 
-export default {
-  chartPlugin
-}

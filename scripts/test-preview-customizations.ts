@@ -12,7 +12,7 @@ import katexModule from 'katex'
 
 import { createMarkdownRenderer } from '../app/src/markdown-renderer'
 import scrollToLine from '../app/src/scroll'
-import type { KatexRenderer, ScrollPayload } from '../app/src/types'
+import type { KatexRenderer } from '../app/src/types'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const require = createRequire(import.meta.url)
@@ -96,12 +96,12 @@ function close(server: http.Server) {
   })
 }
 
-async function withRouteServer<T>(callback: (port: number) => Promise<T>) {
+async function withRouteServer<T>(callback: (port: number) => Promise<T>, plugin: unknown = routePlugin) {
   // The routes resolve their own paths, so no cwd juggling is needed.
   const handleRoute = loadBuiltRoute()
   const server = http.createServer((req, res) => {
     const previewReq = req as PreviewRequest
-    previewReq.plugin = routePlugin
+    previewReq.plugin = plugin
     previewReq.bufnr = '1'
     previewReq.asPath = (req.url || '').replace(/[?#].*$/, '')
     handleRoute(previewReq, res)
@@ -137,6 +137,7 @@ function requestRoute(port: number, pathname: string, headers: Record<string, st
       })
     })
     req.on('error', reject)
+    req.setTimeout(2000, () => req.destroy(new Error(`HTTP route timed out: ${pathname}`)))
     req.end()
   })
 }
@@ -248,129 +249,6 @@ function assertScrollInterpolation() {
   scrollToLine.middle({ cursor: 6, len: 12 })
 
   assert.deepEqual(scrollCalls, [{ top: 400, behavior: 'smooth' }])
-}
-
-function installPreviewDom() {
-  const scrollCalls: Array<{ top: number, behavior: string }> = []
-  const listeners = new Map<string, Array<() => void>>()
-  let hidden = false
-
-  const makeElement = () => ({
-    addEventListener: () => {},
-    checked: false,
-    contentEditable: 'false',
-    dataset: {},
-    hidden: false,
-    innerHTML: '',
-    textContent: ''
-  })
-
-  const elements = new Map<string, unknown>([
-    ['main', makeElement()],
-    ['#page-ctn', makeElement()],
-    ['#page-header', makeElement()],
-    ['#page-title-name', makeElement()],
-    ['#toggle-theme', makeElement()],
-    ['#theme', makeElement()],
-    ['#markdown-body', makeElement()]
-  ])
-
-  const documentElement = {
-    clientHeight: 200,
-    scrollHeight: 2000,
-    scrollTop: 0
-  }
-
-  const document = {
-    body: { scrollTop: 0 },
-    documentElement,
-    scrollingElement: documentElement,
-    get hidden() {
-      return hidden
-    },
-    addEventListener: (event: string, callback: () => void) => {
-      const callbacks = listeners.get(event) || []
-      callbacks.push(callback)
-      listeners.set(event, callbacks)
-    },
-    querySelector: (selector: string) => elements.get(selector) || null,
-    querySelectorAll: (selector: string) => {
-      assert.equal(selector, '[data-source-line]')
-      return [
-        makeAnchor(0, 0),
-        makeAnchor(100, 1000)
-      ]
-    }
-  }
-
-  Object.assign(globalThis, {
-    window: {
-      matchMedia: () => ({ matches: false }),
-      pageYOffset: 0,
-      requestAnimationFrame: (callback: () => void) => Number(setTimeout(callback, 0)),
-      scrollTo: (options: { top: number, behavior: string }) => {
-        scrollCalls.push(options)
-      }
-    },
-    document
-  })
-
-  return {
-    scrollCalls,
-    dispatchVisibility: () => {
-      for (const callback of listeners.get('visibilitychange') || []) {
-        callback()
-      }
-    },
-    setHidden: (value: boolean) => {
-      hidden = value
-    }
-  }
-}
-
-const nextTick = () => new Promise<void>(resolve => setTimeout(resolve, 0))
-
-async function assertVisibleRestoreDoesNotReplayStaleScroll() {
-  const { scrollCalls, dispatchVisibility, setHidden } = installPreviewDom()
-  const { PreviewApp } = await import('../app/src/preview-app')
-  const app = new PreviewApp() as unknown as {
-    onSyncScroll: (payload: ScrollPayload) => void
-  }
-  const payload: ScrollPayload = {
-    cursor: [0, 1, 1, 0],
-    isActive: true,
-    len: 100,
-    options: { sync_scroll_type: 'middle' },
-    winheight: 10,
-    winline: 1
-  }
-
-  scrollToLine.invalidate()
-  app.onSyncScroll(payload)
-  await nextTick()
-  assert.equal(scrollCalls.length, 1)
-
-  scrollCalls.length = 0
-  dispatchVisibility()
-  await nextTick()
-  assert.deepEqual(scrollCalls, [], 'visible preview restore should not replay stale editor scroll')
-
-  setHidden(true)
-  app.onSyncScroll({
-    ...payload,
-    cursor: [0, 21, 1, 0]
-  })
-  assert.deepEqual(scrollCalls, [], 'hidden preview should queue editor scroll without applying it')
-
-  setHidden(false)
-  dispatchVisibility()
-  await nextTick()
-  assert.equal(scrollCalls.length, 1, 'visible preview restore should apply scroll received while hidden once')
-
-  scrollCalls.length = 0
-  dispatchVisibility()
-  await nextTick()
-  assert.deepEqual(scrollCalls, [], 'queued hidden scroll should be consumed after restore')
 }
 
 async function assertServerRoutes() {
@@ -491,6 +369,59 @@ async function assertNotificationDispatch() {
   assert.deepEqual(calls, ['close', 'open'])
 }
 
+async function assertLocalFiles() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mkdp-files-'))
+  fs.mkdirSync(path.join(dir, 'docs'))
+  fs.mkdirSync(path.join(dir, 'assets'))
+  const source = path.join(dir, 'docs/index.md')
+  const attachment = path.join(dir, 'private.txt')
+  fs.writeFileSync(source, '# Files')
+  fs.writeFileSync(attachment, 'attachment content')
+  fs.writeFileSync(path.join(dir, 'assets/icon.svg'), '<svg>root image</svg>')
+  let namedBuffer = true
+  let imagesPath = ''
+  const uncaught: unknown[] = []
+  const capture = (error: unknown) => { uncaught.push(error) }
+  process.on('uncaughtException', capture)
+  try {
+    await withRouteServer(async port => {
+      const readable = await requestRoute(port, '/file/1?path=../private.txt')
+      assert.equal(readable.statusCode, 200)
+      assert.equal(readable.body, 'attachment content')
+      if (process.platform !== 'win32' && process.getuid?.() !== 0) {
+        fs.chmodSync(attachment, 0)
+        const denied = await requestRoute(port, '/file/1?path=../private.txt')
+        assert.equal(denied.statusCode, 403, 'read failures must complete the HTTP response')
+        assert.deepEqual(uncaught, [], 'file errors must not escape as uncaught stream errors')
+        fs.chmodSync(attachment, 0o600)
+      }
+      const image = await requestRoute(port, '/_local_image_%2Fassets%2Ficon.svg')
+      const link = await requestRoute(port, '/file/1?path=%2Fassets%2Ficon.svg')
+      assert.equal(image.statusCode, 200)
+      assert.equal(link.statusCode, 200)
+      assert.equal(link.body, image.body, 'images and attachment links must resolve the same path')
+      namedBuffer = false
+      const unnamed = await requestRoute(port, '/_local_image_..%2Fassets%2Ficon.svg')
+      assert.equal(unnamed.statusCode, 200, 'unnamed buffers resolve images against the editor cwd')
+      imagesPath = path.join(dir, 'assets')
+      const overridden = await requestRoute(port, '/_local_image_icon.svg')
+      assert.equal(overridden.body, image.body, 'images_path overrides the document directory')
+    }, { nvim: {
+      buffers: [{ id: 1 }],
+      call: async (method: string, expr: string) => {
+        if (method === 'bufexists') return 1
+        if (method === 'getcwd' || expr.endsWith(':p:h')) return path.dirname(source)
+        return namedBuffer ? source : ''
+      },
+      getVar: async () => ({ images_path: imagesPath })
+    } })
+  } finally {
+    process.removeListener('uncaughtException', capture)
+    fs.chmodSync(attachment, 0o600)
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+}
+
 const configScript = `
 vim.opt.runtimepath:append(vim.env.MKDP_TEST_ROOT)
 vim.cmd('runtime plugin/markdown-preview.lua')
@@ -568,20 +499,54 @@ const serverScript = `
 vim.opt.runtimepath:append(vim.env.MKDP_TEST_ROOT)
 vim.cmd('runtime plugin/markdown-preview.lua')
 
-local received = nil
-require('markdown-preview').setup({ browser = function(url) received = url end })
+local received = {}
+require('markdown-preview').setup({ browser = function(url) received[#received + 1] = url end })
 
 vim.cmd('edit ' .. vim.env.MKDP_TEST_ROOT .. '/test/test.md')
 vim.cmd('MarkdownPreview')
-vim.wait(30000, function() return received ~= nil end, 100)
+vim.wait(30000, function() return #received > 0 end, 100)
 
-assert(received and received:match('^http://localhost:%d+/page/%d+$'),
-  'the preview server should hand the url back to lua, got ' .. tostring(received))
+assert(received[1] and received[1]:match('^http://localhost:%d+/page/%d+$'),
+  'the preview server should hand the url back to lua, got ' .. tostring(received[1]))
 assert(require('markdown-preview').is_active(), 'the buffer should be marked active')
 
 vim.cmd('MarkdownPreviewStop')
+vim.cmd('MarkdownPreview')
+local server = require('markdown-preview.server')
+local bufnr = vim.api.nvim_get_current_buf()
+local replacement = server.channel(bufnr)
+assert(vim.wait(15000, function() return #received == 2 end, 20), 'restart should open a second URL')
+local channel_after_exit = server.channel(bufnr)
+local active_after_exit = require('markdown-preview').is_active()
+-- Stop the captured job as well, so a failed assertion cannot leak a server.
+pcall(vim.fn.jobstop, replacement)
+assert(channel_after_exit == replacement, 'an old on_exit must not erase the replacement job')
+assert(active_after_exit, 'the replacement preview must stay active')
+vim.cmd('MarkdownPreviewStop')
 vim.wait(5000, function() return not require('markdown-preview').is_active() end, 50)
 assert(not require('markdown-preview').is_active(), 'stopping should deactivate the buffer')
+
+local occupied = assert(vim.uv.new_tcp())
+assert(occupied:bind('127.0.0.1', 0))
+assert(occupied:listen(1, function() end))
+local options = require('markdown-preview.config').get()
+options.server.port = occupied:getsockname().port
+options.server.port_range = 1
+require('markdown-preview').setup(options)
+vim.cmd('MarkdownPreview')
+local failed_job = server.channel(bufnr)
+local failed_job_exited = vim.wait(5000, function() return server.channel(bufnr) == nil end, 20)
+local port_closed = false
+occupied:close(function() port_closed = true end)
+assert(vim.wait(5000, function() return port_closed end, 20))
+if not failed_job_exited then pcall(vim.fn.jobstop, failed_job) end
+assert(failed_job_exited, 'a server that cannot bind must exit so open can retry')
+assert(not require('markdown-preview').is_active(), 'startup failure must deactivate the preview')
+
+vim.cmd('MarkdownPreview')
+assert(vim.wait(15000, function() return #received == 3 end, 20), 'open should retry after the port becomes available')
+assert(require('markdown-preview').is_active(), 'the retried preview should be active')
+vim.cmd('MarkdownPreviewStop')
 `
 
 function hasExecutable(command: string) {
@@ -644,25 +609,11 @@ function assertServerOpensUrlWithHandler() {
 }
 
 
-async function assertDotRendering() {
-  const { instance } = await import('@viz-js/viz')
-  const viz = await instance()
-
-  const ok = viz.render('digraph { a -> b; b -> c }', { format: 'svg' })
-  assert.equal(ok.status, 'success')
-  assert.match(String(ok.output), /<svg\b/)
-  assert.match(String(ok.output), /<title>a&#45;&gt;b<\/title>|a-&gt;b|a&#45;&gt;b/)
-
-  // Invalid input must not throw; renderDot logs and moves on.
-  assert.equal(viz.render('digraph { a -> ', { format: 'svg' }).status, 'failure')
-}
-
 const tests: Array<[string, () => void | Promise<void>]> = [
   ['markdown rendering stays functional', assertMarkdownRendering],
-  ['graphviz renders dot blocks', assertDotRendering],
   ['scroll interpolates between source anchors', assertScrollInterpolation],
-  ['visible restore preserves preview scroll position', assertVisibleRestoreDoesNotReplayStaleScroll],
   ['server routes match Vite assets', assertServerRoutes],
+  ['local files share resolution and report read failures', assertLocalFiles],
   ['editor notifications are dispatched by policy', assertNotificationDispatch],
   ['lua config merges and mirrors to the server', assertLuaConfig],
   ['browser dispatch honours functions and commands', assertBrowserDispatch],

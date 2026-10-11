@@ -18,8 +18,8 @@ const dot = (md: MarkdownIt) => {
   }
 }
 
-export const renderDot = async () => {
-  const list = document.querySelectorAll('.dot')
+export const renderDot = async (nodes: Iterable<HTMLElement>) => {
+  const list = [...nodes]
   if (!list.length) {
     return
   }
@@ -30,6 +30,7 @@ export const renderDot = async () => {
   const viz = await instance()
 
   list.forEach(item => {
+    if (!item.isConnected) return
     try {
       const element = viz.renderSVGElement(item.textContent || '')
       item.textContent = ''
