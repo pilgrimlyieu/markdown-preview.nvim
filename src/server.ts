@@ -6,11 +6,12 @@ import {
   BufferId,
   ChangedTick,
   ContentTickEvent,
+  OpenEvent,
   PageEvent
 } from './app-contract'
 import { getConfig } from './config'
 import { plugin } from './nvim'
-import { echoError, openUrl, previewPayload } from './rpc'
+import { echoError, openUrl, previewPayload, serverReady } from './rpc'
 import routes, { PreviewRequest } from './routes'
 import { getIP } from './util/getIP'
 import createLogger from './util/logger'
@@ -47,7 +48,11 @@ export function run() {
   let clients: ClientMap = {}
   let contentTicks: ContentTickMap = {}
   let nextClientId = 1
-  const startBufnr = Number(process.env.MKDP_START_BUFNR) || 0
+  // Only in-flight opens live here; Lua owns the requested preview lifecycle.
+  const pendingOpens = new Map<string, number>()
+  let latestOpenRequest = 0
+  let idleTimeout = 30000
+  let idleTimer: ReturnType<typeof setTimeout> | undefined
 
   const clientKey = (bufnr: BufferId) => String(bufnr)
 
@@ -77,6 +82,18 @@ export function run() {
 
   const hasClients = ({ bufnr }: { bufnr: BufferId }) => liveClients(bufnr).length > 0
 
+  // A grace period allows page reloads and browser startup to reconnect. This
+  // also releases a server whose browser handler never opened its URL.
+  const scheduleIdleShutdown = () => {
+    clearTimeout(idleTimer)
+    idleTimer = undefined
+    if (idleTimeout > 0 && !hasConnectedClients()) {
+      idleTimer = setTimeout(() => {
+        if (!hasConnectedClients()) process.exit(0)
+      }, idleTimeout)
+    }
+  }
+
   const sendToClient = (client: PreviewClient, event: string, data: unknown) => {
     if (client.readyState === WebSocket.OPEN) {
       client.send(JSON.stringify({ event, data }))
@@ -88,6 +105,7 @@ export function run() {
   }
 
   const closeClients = (bufnr: BufferId) => {
+    pendingOpens.delete(clientKey(bufnr))
     emitToClients(bufnr, 'close_page', undefined)
     liveClients(bufnr).forEach(client => client.close())
     delete clients[clientKey(bufnr)]
@@ -238,18 +256,9 @@ export function run() {
     const key = clientKey(bufnr)
     clients[key] = (clients[key] || []).concat(client)
     updateClientsActiveVar()
+    scheduleIdleShutdown()
 
-    try {
-      const initialData = await previewPayload(plugin.nvim, bufnr, true)
-      if (initialData && initialData.content) {
-        sendToClient(client, 'refresh_content', initialData)
-        // This snapshot says nothing about the content in already open tabs.
-      }
-    } catch (err) {
-      logger.error('initial content load failed: ', err)
-      client.close()
-    }
-
+    // Register before requesting content: a tab can disappear during the RPC.
     client.on('close', () => {
       logger.info('disconnect: ', client.id)
       const remaining = liveClients(bufnr).filter(other => other.id !== client.id)
@@ -257,13 +266,35 @@ export function run() {
         clients[key] = remaining
       } else {
         delete clients[key]
+        delete contentTicks[key]
       }
       updateClientsActiveVar()
+      scheduleIdleShutdown()
     })
+
+    try {
+      const initialData = await previewPayload(plugin.nvim, bufnr, true)
+      if (client.readyState !== WebSocket.OPEN) return
+      if (initialData && initialData.content) {
+        sendToClient(client, 'refresh_content', initialData)
+        // This snapshot says nothing about the content in already open tabs.
+      } else {
+        // A stale URL must stop reconnecting to a buffer whose preview ended.
+        sendToClient(client, 'close_page', undefined)
+        client.close()
+      }
+    } catch (err) {
+      logger.error('initial content load failed: ', err)
+      client.close()
+    }
   })
 
   async function startServer() {
     const { server: serverConfig = {} } = await getConfig(plugin.nvim)
+    const configuredTimeout = serverConfig.idle_timeout
+    if (typeof configuredTimeout === 'number' && Number.isFinite(configuredTimeout) && configuredTimeout >= 0) {
+      idleTimeout = configuredTimeout
+    }
     const openToTheWord = Boolean(serverConfig.open_to_the_world)
     const host = openToTheWord ? '0.0.0.0' : '127.0.0.1'
     const preferredPort = normalizePort(serverConfig.port)
@@ -293,27 +324,38 @@ export function run() {
 
     const closeAllPages = () => {
       logger.info('close all pages')
+      pendingOpens.clear()
       Object.keys(clients).forEach(closeClients)
       clients = {}
       contentTicks = {}
     }
 
-    const openBrowser = async ({ bufnr }: { bufnr: BufferId }) => {
-      const config = await getConfig(plugin.nvim)
-      if (config.combine?.enabled && hasConnectedClients()) {
-        logger.info(`combine preview page: `, bufnr)
-        Object.keys(clients).forEach(clientBufnr => {
-          emitToClients(clientBufnr, 'change_bufnr', bufnr)
-        })
-        return
-      }
+    const openBrowser = async ({ bufnr, requestId }: OpenEvent) => {
+      const key = clientKey(bufnr)
+      pendingOpens.set(key, requestId)
+      latestOpenRequest = requestId
+      scheduleIdleShutdown()
+      try {
+        const config = await getConfig(plugin.nvim)
+        if (pendingOpens.get(key) !== requestId ||
+            (config.combine?.enabled && latestOpenRequest !== requestId)) return
+        if (config.combine?.enabled && hasConnectedClients()) {
+          logger.info(`combine preview page: `, bufnr)
+          Object.keys(clients).forEach(clientBufnr => {
+            emitToClients(clientBufnr, 'change_bufnr', bufnr)
+          })
+          return
+        }
 
-      const openIp = config.server?.open_ip || ''
-      const openHost = openIp || (openToTheWord ? getIP() : 'localhost')
-      const url = `http://${openHost}:${port}/page/${bufnr}`
-      logger.info('open page: ', url)
-      // The editor owns the browser, so `config.browser` can be a Lua function.
-      await openUrl(plugin.nvim, url)
+        const openIp = config.server?.open_ip || ''
+        const openHost = openIp || (openToTheWord ? getIP() : 'localhost')
+        const url = `http://${openHost}:${port}/page/${bufnr}`
+        logger.info('open page: ', url)
+        // Lua validates the request again, after this callback reaches the editor.
+        await openUrl(plugin.nvim, url, { bufnr, requestId })
+      } finally {
+        if (pendingOpens.get(key) === requestId) pendingOpens.delete(key)
+      }
     }
 
     plugin.init({
@@ -326,7 +368,8 @@ export function run() {
       openBrowser
     })
 
-    await openBrowser({ bufnr: startBufnr })
+    scheduleIdleShutdown()
+    await serverReady(plugin.nvim)
   }
 
   startServer().catch(async (err: Error) => {

@@ -6,8 +6,9 @@ local server = require("markdown-preview.server")
 
 local M = {}
 
----@type table<integer, true> buffers with a live preview
+---@type table<integer, integer> buffer -> latest requested preview identity
 local active = {}
+local next_request_id = 0
 
 ---@type table<integer, integer> buffer -> latest scheduled refresh
 local refresh_ticket = {}
@@ -117,6 +118,16 @@ local function attach(bufnr)
   local opts = config.get()
   local group = vim.api.nvim_create_augroup(group_name(bufnr), { clear = true })
 
+  -- Deleted and unloaded buffers always release their preview, even when
+  -- auto_close=false keeps previews of hidden buffers available.
+  vim.api.nvim_create_autocmd({ "BufUnload", "BufDelete", "BufWipeout" }, {
+    group = group,
+    buffer = bufnr,
+    callback = function()
+      M.close(bufnr)
+    end,
+  })
+
   if opts.refresh.debounce > 0 then
     vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
       group = group,
@@ -174,35 +185,39 @@ end
 ---@param bufnr? integer
 ---@return boolean
 function M.is_active(bufnr)
-  return active[bufnr or vim.api.nvim_get_current_buf()] == true
+  return active[bufnr or vim.api.nvim_get_current_buf()] ~= nil
 end
 
---- Start previewing a buffer. A freshly started server opens the browser
---- itself as soon as it is listening.
+--- A late browser callback must still belong to the current open request.
+---@param bufnr integer
+---@param request_id integer
+---@return boolean
+function M.is_current_request(bufnr, request_id)
+  return request_id ~= nil and active[bufnr] == request_id
+end
+
+--- Start previewing a buffer. The server queues the browser request until ready.
 ---@param bufnr? integer
 function M.open(bufnr)
   bufnr = bufnr or vim.api.nvim_get_current_buf()
-  if server.channel(bufnr) then
-    server.notify(bufnr, "open_browser", { bufnr = bufnr })
-  elseif not server.start(bufnr) then
+  if not server.start(bufnr) then
     return
   end
-  active[bufnr] = true
+  next_request_id = next_request_id + 1
+  active[bufnr] = next_request_id
   attach(bufnr)
+  server.notify(bufnr, "open_browser", { bufnr = bufnr, requestId = next_request_id })
 end
 
---- Stop the server behind a buffer. Without `server.per_buffer` that server is
---- shared, so this closes every preview.
+--- Stop this buffer's preview, or the single logical preview in combine mode.
 ---@param bufnr? integer
 function M.stop(bufnr)
-  bufnr = bufnr or vim.api.nvim_get_current_buf()
-  server.stop(bufnr)
-  if config.get().server.per_buffer then
-    deactivate(bufnr)
+  local opts = config.get()
+  if opts.combine.enabled and not opts.server.per_buffer then
+    M.on_server_exit("shared")
+    server.stop()
   else
-    for buffer in pairs(vim.deepcopy(active)) do
-      deactivate(buffer)
-    end
+    M.close(bufnr)
   end
 end
 
@@ -210,9 +225,12 @@ end
 ---@param bufnr? integer
 function M.close(bufnr)
   bufnr = bufnr or vim.api.nvim_get_current_buf()
+  if not active[bufnr] then
+    return
+  end
   server.notify(bufnr, "close_page", { bufnr = bufnr })
   deactivate(bufnr)
-  if config.get().server.per_buffer then
+  if config.get().server.per_buffer or not next(active) then
     server.stop(bufnr)
   end
 end

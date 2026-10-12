@@ -12,15 +12,28 @@ function M.error(lines)
 end
 
 ---@param url string
-function M.open_url(url)
-  require("markdown-preview.browser").open(url)
+---@param bufnr integer
+---@param request_id integer
+function M.open_url(url, bufnr, request_id)
+  if require("markdown-preview.preview").is_current_request(bufnr, request_id) then
+    require("markdown-preview.browser").open(url)
+  end
+end
+
+---@param channel integer
+function M.server_ready(channel)
+  require("markdown-preview.server").ready(channel)
 end
 
 ---@param bufnr integer
 ---@param include_content boolean
 ---@return table
 function M.payload(bufnr, include_content)
-  return require("markdown-preview.preview").payload(bufnr, include_content)
+  local preview = require("markdown-preview.preview")
+  if include_content and not preview.is_active(bufnr) then
+    return vim.empty_dict()
+  end
+  return preview.payload(bufnr, include_content)
 end
 
 --- bufnr(string) accepts patterns. Match names literally before resolving aliases.

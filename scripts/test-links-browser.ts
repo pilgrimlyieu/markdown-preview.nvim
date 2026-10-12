@@ -353,7 +353,7 @@ try {
     opts.combine.enabled = true
     require('markdown-preview').setup(opts)
     local target = vim.fn.bufnr(fixture .. '/docs/unsaved.md')
-    vim.api.nvim_buf_set_lines(target, 0, -1, false, vim.split('# Combined\\n\\n' .. content, '\\n'))
+    vim.api.nvim_buf_set_lines(target, 0, -1, false, vim.split('# Combined\\n\\n[Read linked document](other.md)\\n\\n' .. content, '\\n'))
     vim.api.nvim_set_current_buf(target)
     vim.api.nvim_win_set_cursor(0, { 70, 0 })
   `, [fixture, filler])
@@ -368,6 +368,26 @@ try {
   await heading(page, 'Combined edited')
   assert.deepEqual(errors, [])
   console.log('ok - automatic combined previews subscribe to the new buffer and keep updating')
+
+  const readingOwner = await nvim.lua('return vim.api.nvim_get_current_buf()') as number
+  await page.getByRole('link', { name: 'Read linked document', exact: true }).click()
+  await heading(page, 'Other')
+  const ignoredSwitch = combinedSocket.waitForEvent('framereceived', {
+    predicate: event => String(event.payload).includes('change_bufnr')
+  })
+  await nvim.lua('vim.api.nvim_set_current_buf(...)', [bufnr])
+  await ignoredSwitch
+  await flushFrames(page)
+  await heading(page, 'Other')
+  assert.equal(new URL(page.url()).pathname, `/page/${readingOwner}`,
+    'reading a linked document must retain its original buffer subscription')
+  const closeMessage = combinedSocket.waitForEvent('framereceived', {
+    predicate: event => String(event.payload).includes('close_page')
+  })
+  await nvim.lua('vim.api.nvim_buf_delete(..., { force = true })', [readingOwner])
+  await closeMessage
+  assert.equal(await nvim.lua('return require("markdown-preview").is_active(...)', [readingOwner]), false)
+  console.log('ok - deleting a combined preview source closes its linked reading page after an ignored switch')
 } finally {
   await browser?.close()
   await preview?.stop()

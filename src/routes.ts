@@ -222,9 +222,12 @@ use(async (req, res, next) => {
     // prepareLinks has separated the source URI into a filename and suffixes.
     const filename = decodeURIComponent(req.asPath.slice(prefix.length))
     const { images_path: imagesPath } = await getConfig(req.plugin.nvim)
-    const document = new URL(req.url || '', 'http://localhost').searchParams.get('document')
-    const resolved = await resolveLocalFile(req.plugin.nvim, req.bufnr, filename, {
-      document, imagesPath: asString(imagesPath)
+    const params = new URL(req.url || '', 'http://localhost').searchParams
+    const bufnr = params.get('bufnr')
+    // Older pages omit the source buffer from the URL and depend on Referer.
+    if (!bufnr) res.setHeader('Vary', 'Referer')
+    const resolved = await resolveLocalFile(req.plugin.nvim, bufnr || req.bufnr, filename, {
+      document: params.get('document'), imagesPath: asString(imagesPath)
     })
     return sendFile(req, res, resolved)
   } catch (error) {

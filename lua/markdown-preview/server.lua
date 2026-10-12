@@ -1,15 +1,25 @@
 --- Lifecycle of the Node/Bun preview server.
 ---
---- One server is shared by every buffer unless `server.per_buffer` is set, in
---- which case each buffer gets its own process and port.
+--- One server is shared by every buffer unless `server.per_buffer` is set.
+--- Browser requests wait for the server's ready callback, so opening several
+--- buffers during startup never drops a preview.
 
 local config = require("markdown-preview.config")
 local util = require("markdown-preview.util")
 
 local M = {}
 
----@type table<string|integer, integer> server key -> job channel
-local channels = {}
+---@class mkdp.OpenRequest
+---@field bufnr integer
+---@field requestId integer
+
+---@class mkdp.Server
+---@field channel integer
+---@field ready boolean
+---@field pending mkdp.OpenRequest[] browser requests waiting for startup
+
+---@type table<string|integer, mkdp.Server> server key -> RPC job
+local servers = {}
 
 ---@param bufnr integer
 ---@return string|integer
@@ -35,10 +45,11 @@ end
 ---@param bufnr integer
 ---@return integer|nil channel
 function M.channel(bufnr)
-  return channels[key(bufnr)]
+  local server = servers[key(bufnr)]
+  return server and server.channel
 end
 
---- Start the server owning `bufnr`. It opens the browser itself once listening.
+--- Start the server owning `bufnr`, if necessary.
 ---@param bufnr integer
 ---@return boolean started
 function M.start(bufnr)
@@ -53,9 +64,9 @@ function M.start(bufnr)
   end
 
   local owner = key(bufnr)
+  local server = { channel = 0, ready = false, pending = {} }
   local channel = vim.fn.jobstart(cmd, {
     rpc = true,
-    env = { MKDP_START_BUFNR = tostring(bufnr) },
     on_stderr = function(_, data)
       local lines = vim.tbl_filter(function(line)
         return line ~= ""
@@ -65,10 +76,10 @@ function M.start(bufnr)
       end
     end,
     on_exit = function(job)
-      if channels[owner] ~= job then
+      if servers[owner] ~= server or server.channel ~= job then
         return
       end
-      channels[owner] = nil
+      servers[owner] = nil
       require("markdown-preview.preview").on_server_exit(owner)
     end,
   })
@@ -78,19 +89,38 @@ function M.start(bufnr)
     return false
   end
 
-  channels[owner] = channel
+  server.channel = channel
+  servers[owner] = server
   return true
+end
+
+--- Called by the matching RPC job only after its HTTP and event handlers exist.
+---@param channel integer
+function M.ready(channel)
+  for _, server in pairs(servers) do
+    if server.channel == channel then
+      server.ready = true
+      local pending = server.pending
+      server.pending = {}
+      for _, request in ipairs(pending) do
+        pcall(vim.rpcnotify, channel, "open_browser", request)
+      end
+      return
+    end
+  end
 end
 
 ---@param owner string|integer
 local function stop_channel(owner)
-  local channel = channels[owner]
-  if not channel then
+  local server = servers[owner]
+  if not server then
     return
   end
-  channels[owner] = nil
-  pcall(vim.rpcrequest, channel, "close_all_pages")
-  pcall(vim.fn.jobstop, channel)
+  servers[owner] = nil
+  if server.ready then
+    pcall(vim.rpcrequest, server.channel, "close_all_pages")
+  end
+  pcall(vim.fn.jobstop, server.channel)
 end
 
 --- Stop the server owning `bufnr`, or every server when `bufnr` is omitted.
@@ -100,7 +130,7 @@ function M.stop(bufnr)
     stop_channel(key(bufnr))
     return
   end
-  for owner in pairs(vim.deepcopy(channels)) do
+  for owner in pairs(vim.deepcopy(servers)) do
     stop_channel(owner)
   end
 end
@@ -109,10 +139,26 @@ end
 ---@param method string
 ---@param payload table
 function M.notify(bufnr, method, payload)
-  local channel = M.channel(bufnr)
-  if channel then
-    pcall(vim.rpcnotify, channel, method, payload)
+  local server = servers[key(bufnr)]
+  if not server then
+    return
   end
+  if not server.ready then
+    if method == "open_browser" or method == "close_page" then
+      server.pending = vim.tbl_filter(function(request)
+        return request.bufnr ~= bufnr
+      end, server.pending)
+      if method == "open_browser" then
+        if config.get().combine.enabled then
+          server.pending = { payload }
+        else
+          table.insert(server.pending, payload)
+        end
+      end
+    end
+    return
+  end
+  pcall(vim.rpcnotify, server.channel, method, payload)
 end
 
 return M

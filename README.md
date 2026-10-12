@@ -84,6 +84,7 @@ require("markdown-preview").setup({
   -- Open the preview when entering a matching buffer.
   auto_start = false,
   -- Close the preview page when the buffer is hidden.
+  -- Deleting or unloading the buffer always closes its preview.
   auto_close = true,
   -- Filetypes `auto_start` and `combine.auto_refresh` react to.
   filetypes = { "markdown" },
@@ -103,8 +104,10 @@ require("markdown-preview").setup({
     port = nil,
     -- How many consecutive ports to try when `port` is taken.
     port_range = 32,
-    -- One server per buffer, so several previews can stay live at once.
+    -- Optional process isolation. By default, previews share one server per Neovim.
     per_buffer = false,
+    -- Stop after this many ms without browser connections. 0 keeps it running.
+    idle_timeout = 30000,
     -- Listen on 0.0.0.0 instead of 127.0.0.1.
     open_to_the_world = false,
     -- Host used to build the preview URL. Handy over SSH.
@@ -330,9 +333,26 @@ it.
 
 #### *Can I preview several files at once?*
 
-Set `server.per_buffer = true`. Each buffer then gets its own server and port,
-so previews stay live in parallel instead of taking turns. Otherwise one server
-is shared, and `:MarkdownPreviewStop` in any buffer stops all of them.
+Set `auto_close = false` and open a preview in each buffer. They share one
+server process and port per Neovim instance, with independent live updates.
+`:MarkdownPreviewStop` and `:MarkdownPreviewToggle` affect only the current
+buffer. With `combine.enabled = true`, stopping closes the entire combined
+preview, including a tab that is reading a local link from an earlier buffer.
+Keeping the same origin also lets browser pages reuse cached scripts,
+stylesheets, fonts and language files.
+
+Deleting or unloading a buffer closes its preview even with `auto_close = false`.
+Stopping the last preview releases the server immediately. If browser pages are
+closed directly, the server exits after `server.idle_timeout` milliseconds
+without connections (30 seconds by default); reloading a page during this grace
+period keeps it running. Set the timeout to `0` to keep preview URLs available
+indefinitely, or increase it if browser startup or reconnects take longer.
+Exiting Neovim releases its servers even after an editor crash.
+
+`server.per_buffer = true` remains available for separate processes and ports,
+at the cost of one runtime per previewed buffer. It is not needed for parallel
+previews. Separate Neovim instances each own a server; page rendering and DOM
+state belong to each browser page.
 
 #### *Where are the server logs?*
 
@@ -348,6 +368,7 @@ bun run test        # render, route, config and Neovim integration tests
 bun run test:browser # highlighting, links and rendering (Firefox and Neovim)
 bun run test:links   # link navigation against a real Neovim preview server
 bun run test:preview # escaping, delayed diagrams and scroll restoration
+bun run test:lifecycle # shared servers, buffer removal, startup and idle cleanup
 ```
 
 `build-local` cleans first on purpose: `tsc` never removes stale output, so a

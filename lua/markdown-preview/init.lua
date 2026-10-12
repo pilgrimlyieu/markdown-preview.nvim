@@ -41,7 +41,7 @@ function M.open(bufnr)
   require("markdown-preview.preview").open(bufnr)
 end
 
---- Stop the preview server behind a buffer.
+--- Stop one buffer's preview, or the entire combined preview in combine mode.
 ---@param bufnr? integer
 function M.stop(bufnr)
   require("markdown-preview.preview").stop(bufnr)

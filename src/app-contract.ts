@@ -7,6 +7,10 @@ export interface BufferEvent {
   bufnr: BufferId
 }
 
+export interface OpenEvent extends BufferEvent {
+  requestId: number
+}
+
 export interface PageEvent<T = PreviewPayload> extends BufferEvent {
   data: T
 }
@@ -36,7 +40,7 @@ export interface PreviewApp {
   syncScroll: ((param: PageEvent) => void)
   hasClients: ((params: BufferEvent) => boolean)
   isContentFresh: ((params: ContentTickEvent) => boolean)
-  openBrowser: ((params: BufferEvent) => void)
+  openBrowser: ((params: OpenEvent) => void)
 }
 
 export interface PreviewPlugin {

@@ -1,6 +1,6 @@
 import { NeovimClient, VimValue } from '@chemzqm/neovim'
 
-import { BufferId, PreviewPayload } from './app-contract'
+import { BufferId, OpenEvent, PreviewPayload } from './app-contract'
 
 /**
  * Calls into the editor. Every entry point lives in
@@ -15,8 +15,11 @@ export const echoError = (nvim: NeovimClient, lines: string[]) =>
     // The editor is the thing we report errors to, so there is nowhere left to go.
   })
 
-export const openUrl = (nvim: NeovimClient, url: string) =>
-  invoke(nvim, 'open_url', [url])
+export const openUrl = (nvim: NeovimClient, url: string, { bufnr, requestId }: OpenEvent) =>
+  invoke(nvim, 'open_url', [url, Number(bufnr), requestId])
+
+export const serverReady = async (nvim: NeovimClient) =>
+  invoke(nvim, 'server_ready', [await nvim.channelId])
 
 export const previewPayload = async (
   nvim: NeovimClient,

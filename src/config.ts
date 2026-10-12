@@ -13,6 +13,7 @@ export interface PreviewConfig {
     port?: number
     port_range?: number
     per_buffer?: boolean
+    idle_timeout?: number
     open_to_the_world?: boolean
     open_ip?: string
   }

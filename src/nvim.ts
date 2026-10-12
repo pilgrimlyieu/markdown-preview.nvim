@@ -10,6 +10,10 @@ export const plugin: PreviewPlugin = attach({
   writer: process.stdout
 })
 
+// The RPC pipe belongs to the editor. Its EOF also covers crashes, when
+// VimLeavePre cannot stop the job and browser connections may remain open.
+process.stdin.once('end', () => process.exit(0))
+
 process.on('uncaughtException', (err: Error) => {
   if (plugin.nvim) {
     echoError(plugin.nvim, ['uncaught exception', `${err.stack}`])

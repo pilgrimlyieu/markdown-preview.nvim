@@ -34,6 +34,48 @@ fs.writeFileSync(path.join(fixture, 'docs/bad-chart.md'), '# Invalid chart\n\n[L
 fs.writeFileSync(path.join(fixture, 'docs/chart-clean.md'), '# No chart\n\n[Return](bad-chart.md)')
 fs.writeFileSync(path.join(fixture, 'docs/dot.md'), '# Dot\n\n[Invalid](bad-dot.md)\n\n> ```dot\n> digraph { a [URL="other.md"]; a -> b }\n> ```\n\n' + chart.replace(/^/gm, '> '))
 fs.writeFileSync(path.join(fixture, 'docs/bad-dot.md'), '# Invalid dot\n\n[Recover](dot.md)\n\n```dot\ndigraph { a ->\n```')
+for (const color of ['red', 'tan']) {
+  const directory = path.join(fixture, color)
+  fs.mkdirSync(directory)
+  fs.writeFileSync(path.join(directory, 'index.md'), `# ${color}\n\n![Logo](logo.svg)\n`)
+  const logo = path.join(directory, 'logo.svg')
+  fs.writeFileSync(logo, svg.replace('<rect ', `<rect fill="${color}" `))
+  // Equal size and mtime make these files share the old stat-based ETag.
+  fs.utimesSync(logo, new Date('2026-01-01'), new Date('2026-01-01'))
+}
+
+async function assertSharedImages(browser: Browser) {
+  const preview = await startPreview(path.join(fixture, 'red/index.md'))
+  const context = await browser.newContext()
+  try {
+    const first = await context.newPage()
+    await first.goto(preview.url)
+    await first.waitForFunction(() => document.querySelector<HTMLImageElement>('img')?.naturalWidth === 20)
+    const firstImage = await first.locator('img').getAttribute('src')
+    const other = await preview.open(path.join(fixture, 'tan/index.md'))
+    const second = await context.newPage()
+    await second.goto(other.url)
+    await second.waitForFunction(() => document.querySelector<HTMLImageElement>('img')?.naturalWidth === 20)
+    const secondImage = await second.locator('img').getAttribute('src')
+    assert.equal(new URL(preview.url).origin, new URL(other.url).origin)
+    assert.notEqual(firstImage, secondImage, 'same-name images in different buffers need distinct cache keys')
+    const pixel = (page: Page) => page.locator('img').evaluate(image => {
+      const canvas = document.createElement('canvas')
+      const ctx = canvas.getContext('2d')!
+      ctx.drawImage(image as HTMLImageElement, 0, 0)
+      return [...ctx.getImageData(0, 0, 1, 1).data]
+    })
+    assert.deepEqual(await pixel(first), [255, 0, 0, 255])
+    assert.deepEqual(await pixel(second), [210, 180, 140, 255])
+    const withoutReferer = await fetch(new URL(secondImage!, other.url))
+    assert.equal(withoutReferer.status, 200, 'an image URL must identify its source without a Referer')
+    assert.match(await withoutReferer.text(), /fill="tan"/)
+  } finally {
+    await context.close()
+    await preview.stop()
+  }
+  console.log('ok - shared previews isolate same-name image caches and resolve without Referer')
+}
 
 async function frames(page: Page) {
   await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
@@ -220,6 +262,7 @@ let browser: Browser | undefined
 let preview: Awaited<ReturnType<typeof startPreview>> | undefined
 try {
   browser = await firefox.launch({ headless: true })
+  await assertSharedImages(browser)
   await assertEscapedMarkdown(browser)
   preview = await startPreview(path.join(fixture, 'docs/index.md'), {
     scroll: { throttle: 0 }, render: { mkit: { typographer: false } }

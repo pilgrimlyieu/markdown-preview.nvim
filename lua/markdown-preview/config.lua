@@ -22,7 +22,8 @@
 ---@class mkdp.ServerConfig
 ---@field port? integer Preferred port. `nil` picks a random one.
 ---@field port_range? integer How many consecutive ports to try when `port` is taken.
----@field per_buffer? boolean Run one server per buffer so several previews stay live at once.
+---@field per_buffer? boolean Isolate each buffer in its own server. Defaults to sharing one per Neovim.
+---@field idle_timeout? integer Stop after this many ms without browser connections. `0` disables it.
 ---@field open_to_the_world? boolean Listen on `0.0.0.0` instead of `127.0.0.1`.
 ---@field open_ip? string Host used to build the preview URL. Handy over SSH.
 
@@ -79,6 +80,7 @@ local defaults = {
     port = nil,
     port_range = 32,
     per_buffer = false,
+    idle_timeout = 30000,
     open_to_the_world = false,
     open_ip = nil,
   },

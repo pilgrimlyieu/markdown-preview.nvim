@@ -56,6 +56,8 @@ export function prepareLinks(content: ParentNode, bufnr: number, documentPath: s
     if (!local) continue
     const url = new URL(`/_local_image_${encodeURIComponent(local.filename)}`, window.location.href)
     url.search = local.search
+    // Shared previews can resolve the same relative name to different files.
+    url.searchParams.set('bufnr', String(bufnr))
     if (documentPath) url.searchParams.set('document', documentPath)
     else url.searchParams.delete('document')
     img.setAttribute('src', url.pathname + url.search + local.hash)

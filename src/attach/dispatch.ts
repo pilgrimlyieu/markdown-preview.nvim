@@ -3,6 +3,7 @@ import { BufferId, PreviewApp, PreviewPayload } from '../app-contract'
 export interface Notification {
   bufnr: BufferId
   data?: PreviewPayload
+  requestId?: number
 }
 
 /**
@@ -23,7 +24,7 @@ export type Dispatch =
 export function dispatch(
   app: PreviewApp | undefined,
   method: string,
-  { bufnr, data }: Notification
+  { bufnr, data, requestId }: Notification
 ): Dispatch {
   if (!app) {
     return 'dropped-before-init'
@@ -34,7 +35,8 @@ export function dispatch(
     return 'closed'
   }
   if (method === 'open_browser') {
-    app.openBrowser({ bufnr })
+    if (requestId === undefined) return 'dropped-without-data'
+    app.openBrowser({ bufnr, requestId })
     return 'opened'
   }
   if (method !== 'refresh_content' && method !== 'sync_scroll') {

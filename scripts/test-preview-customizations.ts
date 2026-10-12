@@ -329,7 +329,7 @@ async function assertNotificationDispatch() {
   }
   let hasClients = true
   let contentFresh = false
-  const payload = { bufnr: 1, data: { changedtick: 7, content: ['x'] } }
+  const payload = { bufnr: 1, requestId: 1, data: { changedtick: 7, content: ['x'] } }
 
   // Nothing may reach the app before the server has initialised it.
   assert.equal(dispatch(undefined, 'refresh_content', payload), 'dropped-before-init')
@@ -396,6 +396,7 @@ async function assertLocalFiles() {
         fs.chmodSync(attachment, 0o600)
       }
       const image = await requestRoute(port, '/_local_image_%2Fassets%2Ficon.svg')
+      assert.equal(header(image.headers.vary), 'Referer', 'legacy image cache entries must distinguish source buffers')
       const link = await requestRoute(port, '/file/1?path=%2Fassets%2Ficon.svg')
       assert.equal(image.statusCode, 200)
       assert.equal(link.statusCode, 200)

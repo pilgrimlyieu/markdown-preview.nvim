@@ -12,7 +12,8 @@
   "scripts": {
     "clean": "rm -rf app/lib app/out",
     "watch": "tsc -w -p ./",
-    "test": "bun scripts/test-highlighting.ts && bun scripts/test-preview-customizations.ts",
+    "test": "bun scripts/test-highlighting.ts && bun scripts/test-preview-customizations.ts && bun scripts/test-server-lifecycle.ts",
+    "test:lifecycle": "bun scripts/test-server-lifecycle.ts",
     "test:browser": "bun scripts/test-highlighting-browser.ts && bun scripts/test-links-browser.ts && bun scripts/test-preview-browser.ts",
     "test:links": "bun scripts/test-links-browser.ts",
     "test:preview": "bun scripts/test-preview-browser.ts",
