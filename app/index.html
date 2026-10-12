@@ -13,6 +13,14 @@
   </head>
   <body>
     <main data-theme="">
+      <nav id="preview-tools" aria-label="Preview controls" data-preview-controls>
+        <button id="toggle-files" type="button" aria-controls="preview-files" aria-expanded="false" disabled>Files</button>
+        <button id="refresh-file" type="button" aria-label="Refresh file" hidden>Refresh</button>
+        <a id="back-to-source" href="#" hidden>Back to source</a>
+        <span id="reading-path" hidden></span>
+      </nav>
+      <button id="files-backdrop" type="button" aria-label="Close file tree" data-preview-controls hidden></button>
+      <aside id="preview-files" aria-label="Project files" data-preview-controls hidden></aside>
       <div id="page-ctn" contenteditable="false">
         <header id="page-header" hidden>
           <h3>

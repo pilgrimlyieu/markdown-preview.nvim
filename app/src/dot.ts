@@ -1,4 +1,5 @@
 import type MarkdownIt from 'markdown-it'
+import type { Viz } from '@viz-js/viz'
 import { getFenceRenderer } from './markdown-it-utils'
 import { escape } from './utils'
 
@@ -18,6 +19,8 @@ const dot = (md: MarkdownIt) => {
   }
 }
 
+let vizInstance: Promise<Viz> | null = null
+
 export const renderDot = async (nodes: Iterable<HTMLElement>) => {
   const list = [...nodes]
   if (!list.length) {
@@ -26,8 +29,13 @@ export const renderDot = async (nodes: Iterable<HTMLElement>) => {
 
   // Graphviz is a megabyte of WebAssembly, so it only loads once a document
   // actually contains a dot block.
-  const { instance } = await import('@viz-js/viz')
-  const viz = await instance()
+  if (!vizInstance) {
+    vizInstance = import('@viz-js/viz').then(({ instance }) => instance()).catch(error => {
+      vizInstance = null
+      throw error
+    })
+  }
+  const viz = await vizInstance
 
   list.forEach(item => {
     if (!item.isConnected) return

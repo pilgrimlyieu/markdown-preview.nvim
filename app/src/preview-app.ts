@@ -2,6 +2,7 @@ import type { KatexRenderer, MarkdownRendererModule, PreviewOptions, PreviewPayl
 import { HighlightClient } from './highlight-client'
 import createPreviewSocket from './preview-socket'
 import { PreviewNavigation } from './preview-navigation'
+import { PreviewControls } from './preview-controls'
 import scrollToLine from './scroll'
 import { boolOption } from './utils'
 
@@ -84,6 +85,8 @@ export class PreviewApp {
   private readonly contentNode = requireElement<HTMLElement>('#markdown-body')
 
   private preContent: string | null = null
+  private preChangedTick: number | undefined
+  private preOptionsKey = ''
   private renderTimer: ReturnType<typeof setTimeout> | null = null
   private cancelIdleRender: (() => void) | null = null
   private cancelPostRender: (() => void) | null = null
@@ -106,6 +109,7 @@ export class PreviewApp {
   private bufnr = -1
   private socket: PreviewSocket | null = null
   private navigation: PreviewNavigation | null = null
+  private controls: PreviewControls | null = null
   private theme = ''
 
   constructor() {
@@ -126,11 +130,13 @@ export class PreviewApp {
   start() {
     this.navigation = new PreviewNavigation(this.contentNode, {
       connect: bufnr => this.startSocket(bufnr),
-      render: (payload, newDocument) => {
+      render: (payload, newDocument, image) => {
         if (newDocument) this.preContent = null
-        this.onRefreshContent(payload)
-      }
+        this.onRefreshContent(payload, image)
+      },
+      location: location => this.controls?.update(location)
     })
+    this.controls = new PreviewControls(this.navigation)
     this.navigation.start()
   }
 
@@ -183,13 +189,14 @@ export class PreviewApp {
   }
 
   private rendererKey(options: PreviewOptions, katexReady: boolean) {
+    const { content_editable, disable_filename, disable_sync_scroll, sync_scroll_type, ...renderOptions } = options
     return JSON.stringify({
-      options,
+      options: renderOptions,
       katexReady
     })
   }
 
-  private getMarkdownRenderer(markdownRenderer: MarkdownRendererModule, options: PreviewOptions) {
+  private getHighlighter(options: PreviewOptions) {
     const highlighterOptionsKey = JSON.stringify(options.highlight || {})
     if (!this.highlighter || this.highlighterOptionsKey !== highlighterOptionsKey) {
       this.highlighter?.dispose()
@@ -200,9 +207,14 @@ export class PreviewApp {
       this.highlighter.setPaused(this.isPreviewHidden())
       this.markdownRenderer = null
     }
+    return this.highlighter
+  }
+
+  private getMarkdownRenderer(markdownRenderer: MarkdownRendererModule, options: PreviewOptions) {
+    const highlighter = this.getHighlighter(options)
     const key = this.rendererKey(options, Boolean(this.katexRenderer))
     if (!this.markdownRenderer || this.markdownRendererKey !== key) {
-      this.markdownRenderer = markdownRenderer.createMarkdownRenderer(options, this.highlighter, this.katexRenderer)
+      this.markdownRenderer = markdownRenderer.createMarkdownRenderer(options, highlighter, this.katexRenderer)
       this.markdownRendererKey = key
     }
     return this.markdownRenderer
@@ -399,7 +411,11 @@ export class PreviewApp {
       if (this.socket === socket) this.navigation?.receiveSource(payload as PreviewPayload)
     })
     socket.on('sync_scroll', (payload) => {
-      if (this.socket === socket && this.navigation?.resumeEditorScroll()) {
+      if (this.socket !== socket) return
+      // A deduplicated refresh still carries current filename/options. Pure
+      // cursor events have no content and keep the existing lightweight path.
+      if ((payload as PreviewPayload).content) this.navigation?.receiveSource(payload as PreviewPayload)
+      if (this.navigation?.resumeEditorScroll()) {
         this.onSyncScroll(payload as ScrollPayload)
       }
     })
@@ -417,6 +433,7 @@ export class PreviewApp {
     this.invalidatePendingRender()
     this.clearEnhancedBlocks()
     this.navigation?.dispose()
+    this.controls?.dispose()
     this.socket?.close()
     this.socket = null
     this.highlighter?.dispose()
@@ -456,25 +473,17 @@ export class PreviewApp {
     }
   }
 
-  private applyRenderedContent({
-    renderedContent,
-    name,
-    pageTitle,
-    theme,
-    options,
-    refreshScroll
-  }: {
-    renderedContent: string
-    name: string
-    pageTitle: string
-    theme: string
-    options: PreviewOptions
-    refreshScroll: () => void
-  }) {
-    const displayName = filenameWithoutExtension(name)
-
+  private updatePageMetadata(payload: PreviewPayload) {
+    const options = payload.options || {}
+    const displayName = filenameWithoutExtension(payload.name || '')
     this.nameNode.textContent = displayName
-    document.title = (pageTitle || '').replace(/\$\{name\}/, displayName)
+    document.title = (payload.pageTitle || '').replace(/\$\{name\}/, displayName)
+    this.pageContainer.contentEditable = !payload.file && boolOption(options.content_editable) ? 'true' : 'false'
+    this.header.hidden = boolOption(options.disable_filename)
+    this.setTheme(this.resolveTheme(payload.theme))
+  }
+
+  private applyRenderedContent(renderedContent: string, refreshScroll: () => void) {
     const template = document.createElement('template')
     template.innerHTML = renderedContent
     // Resolve resources while detached, before the browser can request them
@@ -486,10 +495,6 @@ export class PreviewApp {
       [...this.contentNode.querySelectorAll<HTMLElement>('pre[data-highlight-id]')]
         .map(node => Number(node.dataset.highlightId))
     ))
-    this.pageContainer.contentEditable = boolOption(options.content_editable) ? 'true' : 'false'
-    this.header.hidden = boolOption(options.disable_filename)
-    this.setTheme(theme)
-
     scrollToLine.invalidate()
     refreshScroll()
     this.navigation?.afterRender()
@@ -543,20 +548,27 @@ export class PreviewApp {
       })
   }
 
-  private onRefreshContent(payload: PreviewPayload) {
+  private onRefreshContent(payload: PreviewPayload, image?: HTMLImageElement) {
+    // Update on receipt so a delayed render cannot restore older metadata.
+    this.updatePageMetadata(payload)
+    if (payload.file) {
+      this.showFile(payload, image)
+      return
+    }
     const options = payload.options || {}
     const content = payload.content || []
     const cursor = payload.cursor || [0, 1, 1, 0]
-    const pageTitle = payload.pageTitle || ''
-    const name = payload.name || ''
-    const theme = this.resolveTheme(payload.theme)
     const winline = payload.winline || 1
     const winheight = payload.winheight || 1
     const isActive = payload.isActive !== false
-    const newContent = content.join('\n')
+    const sameTick = this.preContent !== null && payload.changedtick !== undefined && payload.changedtick === this.preChangedTick
+    const newContent = sameTick ? this.preContent! : content.join('\n')
+    const optionsKey = this.rendererKey(options, false)
     const isInitialContent = this.preContent === null
-    const refreshContent = this.preContent !== newContent
+    const refreshContent = this.preContent !== newContent || this.preOptionsKey !== optionsKey
     this.preContent = newContent
+    this.preChangedTick = payload.changedtick
+    this.preOptionsKey = optionsKey
 
     const scrollPayload: ScrollPayload = {
       options,
@@ -586,14 +598,7 @@ export class PreviewApp {
       markdownRenderer: MarkdownRendererModule,
       renderedContent: string
     ) => {
-      this.applyRenderedContent({
-        renderedContent,
-        name,
-        pageTitle,
-        theme,
-        options,
-        refreshScroll
-      })
+      this.applyRenderedContent(renderedContent, refreshScroll)
       this.schedulePostRender(renderVersion, markdownRenderer, options)
       if (refreshMathBlocks && !this.mathDependenciesReady(newContent)) {
         this.upgradeMathRendering(renderVersion, markdownRenderer, options, newContent, (nextContent) => {
@@ -636,5 +641,20 @@ export class PreviewApp {
       this.renderTimer = null
       runRefresh(true)
     }, 16)
+  }
+
+  private showFile(payload: PreviewPayload, image?: HTMLImageElement) {
+    const version = this.invalidatePendingRender()
+    this.clearEnhancedBlocks()
+    this.preContent = null
+    this.latestScroll = null
+    const show = () => {
+      void import('./file-renderer').then(({ renderFile }) => {
+        if (version !== this.renderVersion) return
+        this.applyRenderedContent(renderFile(payload, this.getHighlighter(payload.options || {})), () => {})
+        if (image) this.contentNode.querySelector('.file-image-slot')?.replaceWith(image)
+      }).catch(console.error)
+    }
+    if (!this.deferUntilVisible(show)) show()
   }
 }

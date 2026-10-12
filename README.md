@@ -75,6 +75,52 @@ function takes an optional buffer number and defaults to the current buffer.
 
 Run `:checkhealth markdown-preview` if a preview refuses to start.
 
+### Reading project files
+
+Click **Files** in the bottom toolbar to browse the project. Expand a directory,
+then click a file to read it in the current page; Ctrl/Cmd-click or middle-click
+opens another browser tab. This does not open buffers or move the cursor in
+Neovim. Browser back and forward restore the document and reading position.
+
+The tree starts at Neovim's effective working directory when the source buffer's
+preview is first activated, including window-local `:lcd` and tab-local `:tcd`.
+Later `:cd` calls do not move that root; stop and reopen the preview to capture a
+new one. The tree is closed by default and only reads directories you expand.
+**Refresh tree** rereads the listing; **Filter shown files** filters entries
+already loaded, without searching the rest of the project.
+
+| Selected file | Preview |
+| --- | --- |
+| Markdown | The normal Markdown renderer, including diagrams and relative links |
+| Source code, configuration, UTF-8 text, HTML source | Literal text with syntax highlighting where supported |
+| Browser-supported images, including SVG | An image view |
+| PDF | File information, download, and **Open in browser** |
+| Other binary files or files exceeding the preview limits | File information and download |
+
+Files you read are snapshots: loaded buffers supply their unsaved text, otherwise
+the file comes from disk. **Refresh file** reads again and keeps your position;
+an error leaves the current view intact. Downloads use the saved file on disk.
+**Back to source** fetches the latest source-buffer content and resumes live
+updates. Selecting the source file itself also returns to its live preview.
+
+These reading tabs belong to the source buffer. Set `auto_close = false` to keep
+them open when that buffer is hidden; deleting/unloading the buffer or stopping
+its preview still closes its tabs. With `combine.enabled`, live pages follow
+buffer changes and update their trees, while pages reading another file stay
+with their original source until you return to it.
+
+Text previews default to 2 MiB and image previews to 20 MiB. Large files are
+available as streamed downloads without loading them into the preview. Directory
+pages show up to 200 entries; the browser keeps at most 2,000 rows and 32 expanded
+directories. A directory scan examines at most `file_tree.max_entries` entries
+and reports when that limit is reached. Pagination bounds display size, but
+enumerating and sorting a directory still costs time proportional to its size.
+There is no recursive scan or file watcher.
+
+The tree's file and resource APIs restrict paths to the captured root, including
+symlink targets. Existing Markdown links and `images_path` keep their previous
+path resolution, including access outside that root.
+
 ## Configuration
 
 Defaults, as declared in [`lua/markdown-preview/config.lua`](lua/markdown-preview/config.lua):
@@ -139,6 +185,18 @@ require("markdown-preview").setup({
     enabled = false,
     -- Point that tab at the buffer you switch to.
     auto_refresh = true,
+  },
+
+  file_tree = {
+    -- Exact names, at any level; not glob patterns or gitignore rules.
+    -- Show hidden files does not override this list. {} excludes nothing.
+    exclude = { ".git", ".jj", "node_modules", ".venv", "target", "dist", "build" },
+    -- Maximum entries examined in a single directory.
+    max_entries = 20000,
+    -- Other files fall back to download when too large to preview.
+    -- These limits do not apply to the original live source buffer.
+    max_text_bytes = 2 * 1024 * 1024,
+    max_image_bytes = 20 * 1024 * 1024,
   },
 
   -- Handed to the preview page renderer.
@@ -365,10 +423,12 @@ verbosity with `NVIM_MKDP_LOG_LEVEL=debug`.
 bun run typecheck   # tsc over the server and the page
 bun run build-local # clean, then build app/lib and app/out
 bun run test        # render, route, config and Neovim integration tests
-bun run test:browser # highlighting, links and rendering (Firefox and Neovim)
+bun run test:browser # highlighting, links, rendering and project reading (Firefox and Neovim)
 bun run test:links   # link navigation against a real Neovim preview server
 bun run test:preview # escaping, delayed diagrams and scroll restoration
 bun run test:lifecycle # shared servers, buffer removal, startup and idle cleanup
+bun run test:files   # project roots, directory pages, file limits and resource routes
+bun run test:project # file-tree navigation, refresh, keyboard and display in Firefox
 ```
 
 `build-local` cleans first on purpose: `tsc` never removes stale output, so a

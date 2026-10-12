@@ -5,6 +5,7 @@ import path from 'path'
 import { PreviewPlugin } from './app-contract'
 import { asString, getConfig } from './config'
 import { readLocalDocument, resolveLocalFile } from './local-files'
+import projectRoutes from './project-routes'
 import createLogger from './util/logger'
 
 const logger = createLogger('app/routes')
@@ -143,6 +144,8 @@ use((req, res, next) => {
   }
   next()
 })
+
+use(projectRoutes)
 
 use(async (req, res, next) => {
   const match = req.asPath.match(/^\/(api\/document|file)\/(\d+)$/)

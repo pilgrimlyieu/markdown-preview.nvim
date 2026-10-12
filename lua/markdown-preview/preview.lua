@@ -10,6 +10,9 @@ local M = {}
 local active = {}
 local next_request_id = 0
 
+---@type table<integer, string> effective cwd at the start of each preview lifetime
+local roots = {}
+
 ---@type table<integer, integer> buffer -> latest scheduled refresh
 local refresh_ticket = {}
 
@@ -56,7 +59,7 @@ function M.payload(bufnr, include_content)
   payload.changedtick = vim.api.nvim_buf_get_changedtick(bufnr)
   payload.pageTitle = opts.page_title
   payload.theme = opts.theme or ""
-  payload.name = vim.fn.bufname(bufnr)
+  payload.name = vim.api.nvim_buf_get_name(bufnr)
   if include_content then
     payload.content = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
   end
@@ -177,6 +180,7 @@ end
 ---@param bufnr integer
 local function deactivate(bufnr)
   active[bufnr] = nil
+  roots[bufnr] = nil
   refresh_ticket[bufnr] = nil
   scroll_queued[bufnr] = nil
   pcall(vim.api.nvim_del_augroup_by_name, group_name(bufnr))
@@ -186,6 +190,12 @@ end
 ---@return boolean
 function M.is_active(bufnr)
   return active[bufnr or vim.api.nvim_get_current_buf()] ~= nil
+end
+
+---@param bufnr integer
+---@return string|nil
+function M.project_root(bufnr)
+  return active[bufnr] and roots[bufnr] or nil
 end
 
 --- A late browser callback must still belong to the current open request.
@@ -202,6 +212,11 @@ function M.open(bufnr)
   bufnr = bufnr or vim.api.nvim_get_current_buf()
   if not server.start(bufnr) then
     return
+  end
+  -- Capture lcd/tcd in the initiating window, before any asynchronous RPC.
+  -- Reopening or combine refocus updates the request, not the project root.
+  if not active[bufnr] then
+    roots[bufnr] = vim.fn.getcwd()
   end
   next_request_id = next_request_id + 1
   active[bufnr] = next_request_id

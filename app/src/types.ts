@@ -1,5 +1,6 @@
 import type MarkdownIt from 'markdown-it'
 import type { LanguageRegistration } from 'shiki/types'
+import type { FilePresentation } from '../../src/project-contract'
 
 export interface HighlightOptions {
   languages?: LanguageRegistration[]
@@ -32,6 +33,7 @@ export interface PreviewPayload {
   name?: string
   content?: string[]
   changedtick?: number
+  file?: FilePresentation
 }
 
 export interface ScrollPayload {

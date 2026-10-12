@@ -51,7 +51,8 @@ export function dispatch(
     return 'dropped-without-clients'
   }
 
-  // A refresh carrying content the page already has is only a viewport move.
+  // Unchanged text takes the viewport path. Preserve its full payload because
+  // filename and render options can change without advancing changedtick.
   if (method === 'sync_scroll' || app.isContentFresh({ bufnr, changedtick: data.changedtick })) {
     app.syncScroll({ bufnr, data })
     return 'scrolled'

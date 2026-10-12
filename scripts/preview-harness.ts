@@ -10,9 +10,9 @@ import type { VimValue } from '@chemzqm/neovim'
 export const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
 /** Use the public setup/open path, including filetype detection and BufEnter. */
-export async function startPreview(filename: string, options: Record<string, VimValue> = {}) {
+export async function startPreview(filename: string, options: Record<string, VimValue> = {}, cwd?: string) {
   assert.ok(fs.existsSync(path.join(repositoryRoot, 'app/out/index.html')), 'run bun run build-local first')
-  const editor = spawn('nvim', ['--headless', '--embed', '-u', 'NONE', '-i', 'NONE', '-n'], { stdio: 'pipe' })
+  const editor = spawn('nvim', ['--headless', '--embed', '-u', 'NONE', '-i', 'NONE', '-n'], { stdio: 'pipe', cwd })
   // The client calls unpipe() when detaching; Bun's child stdin is only Writable.
   const input = new PassThrough()
   input.pipe(editor.stdin)

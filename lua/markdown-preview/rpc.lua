@@ -36,6 +36,16 @@ function M.payload(bufnr, include_content)
   return preview.payload(bufnr, include_content)
 end
 
+--- Only active previews may enumerate the project captured by their owner.
+---@param bufnr integer
+---@return table|nil
+function M.project(bufnr)
+  local root = require("markdown-preview.preview").project_root(bufnr)
+  if root then
+    return { root = root, options = require("markdown-preview.config").get().file_tree }
+  end
+end
+
 --- bufnr(string) accepts patterns. Match names literally before resolving aliases.
 ---@param filename string
 ---@return integer|nil
@@ -69,16 +79,28 @@ end
 --- Prefer an already loaded buffer so its unsaved edits are visible too.
 ---@param bufnr integer
 ---@param filename string
+---@param reading? { maxBytes: integer, text: boolean } Restricted file-tree reads only.
 ---@return table
-function M.document(bufnr, filename)
+function M.document(bufnr, filename, reading)
   local target = loaded_buffer(filename)
   if target == bufnr then
+    -- A source alias resumes the existing live preview, regardless of file type
+    -- or the new reader's size limit. Fetch its snapshot through the source path.
+    if reading then
+      return { path = vim.NIL, source = true }
+    end
     return { path = vim.NIL, payload = M.payload(bufnr, true) }
   end
   local payload = M.payload(bufnr, false)
   payload.name = filename
   payload.isActive = false
-  if target then
+  if target and (not reading or reading.text) then
+    if reading then
+      local bytes = vim.api.nvim_buf_get_offset(target, vim.api.nvim_buf_line_count(target))
+      if bytes < 0 or bytes > reading.maxBytes then
+        return { path = filename, payload = payload, tooLarge = bytes }
+      end
+    end
     payload.content = vim.api.nvim_buf_get_lines(target, 0, -1, false)
   end
   return { path = filename, payload = payload }

@@ -49,7 +49,9 @@ async function assertSharedImages(browser: Browser) {
   const context = await browser.newContext()
   try {
     const first = await context.newPage()
+    const connected = first.waitForEvent('websocket')
     await first.goto(preview.url)
+    const socket = await connected
     await first.waitForFunction(() => document.querySelector<HTMLImageElement>('img')?.naturalWidth === 20)
     const firstImage = await first.locator('img').getAttribute('src')
     const other = await preview.open(path.join(fixture, 'tan/index.md'))
@@ -70,11 +72,27 @@ async function assertSharedImages(browser: Browser) {
     const withoutReferer = await fetch(new URL(secondImage!, other.url))
     assert.equal(withoutReferer.status, 200, 'an image URL must identify its source without a Referer')
     assert.match(await withoutReferer.text(), /fill="tan"/)
+    await first.bringToFront()
+    const refreshed = socket.waitForEvent('framereceived')
+    await preview.nvim.lua('vim.api.nvim_set_current_buf(...); vim.cmd("doautocmd BufWritePost")', [preview.bufnr])
+    await refreshed
+    const renamedPath = path.join(fixture, 'tan/renamed.md')
+    const renamed = socket.waitForEvent('framereceived')
+    await preview.nvim.lua('vim.api.nvim_buf_set_name(0, ...); vim.cmd("doautocmd BufWritePost")', [renamedPath])
+    await renamed
+    await first.waitForFunction(filename => {
+      const image = document.querySelector<HTMLImageElement>('img')
+      return image?.complete && image.naturalWidth === 20 && new URL(image.src).searchParams.get('document') === filename
+    }, renamedPath)
+    assert.deepEqual(await pixel(first), [210, 180, 140, 255], 'renaming the same buffer changes its relative image base')
+    await first.reload()
+    await first.waitForFunction(() => document.querySelector<HTMLImageElement>('img')?.naturalWidth === 20)
+    assert.deepEqual(await pixel(first), [210, 180, 140, 255], 'reload must not validate another directory\'s same-size/mtime image')
   } finally {
     await context.close()
     await preview.stop()
   }
-  console.log('ok - shared previews isolate same-name image caches and resolve without Referer')
+  console.log('ok - shared and renamed sources isolate same-name image caches and resolve without Referer')
 }
 
 async function frames(page: Page) {
@@ -168,8 +186,20 @@ async function assertDotRecovery(browser: Browser, preview: Awaited<ReturnType<t
     await route.continue()
   })
   try {
+    await page.addInitScript(() => {
+      const state = window as unknown as { wasmInstances: number }
+      state.wasmInstances = 0
+      const instantiate = WebAssembly.instantiate
+      WebAssembly.instantiate = ((...args: unknown[]) => {
+        if (++state.wasmInstances === 1) return Promise.reject(new Error('Graphviz initialization retry test'))
+        return Reflect.apply(instantiate, WebAssembly, args)
+      }) as typeof WebAssembly.instantiate
+    })
+    const initializationError = page.waitForEvent('console', { predicate: message => message.text().includes('Graphviz initialization retry test') })
     await page.goto(`${url}?path=${encodeURIComponent(path.join(fixture, 'docs/dot.md'))}`)
     await chartRequested
+    await initializationError
+    await page.getByRole('button', { name: 'Refresh file', exact: true }).click()
     await page.waitForSelector('.dot svg')
     assert.match(await page.locator('.dot svg').textContent() || '', /a->b/)
     navigations.length = 0
@@ -191,11 +221,13 @@ async function assertDotRecovery(browser: Browser, preview: Awaited<ReturnType<t
     assert.equal(await page.locator('.dot svg').count(), 0)
     await page.getByRole('link', { name: 'Recover' }).click()
     await page.waitForSelector('.dot svg')
+    assert.equal(await page.evaluate(() => (window as unknown as { wasmInstances: number }).wasmInstances), 2,
+      'after retrying initialization, navigation and invalid input reuse the same Graphviz engine')
   } finally {
     release()
     await page.close()
   }
-  console.log('ok - nested diagrams have usable SVG links while other charts load, with history and error recovery')
+  console.log('ok - nested diagrams have usable SVG links, retry failed initialization and reuse Graphviz across navigation')
 }
 
 async function assertChartFailureCleanup(browser: Browser, url: string) {
@@ -294,6 +326,7 @@ try {
 
   await page.getByRole('link', { name: 'Read', exact: true }).click()
   await page.waitForFunction(() => Math.abs(document.getElementById('reading')!.getBoundingClientRect().top) < 2)
+  await frames(page)
   const readingPosition = await page.evaluate(() => window.scrollY)
   await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')))
   await frames(page)

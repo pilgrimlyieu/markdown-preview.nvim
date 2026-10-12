@@ -1,6 +1,7 @@
 import { NeovimClient, VimValue } from '@chemzqm/neovim'
 
 import { BufferId, OpenEvent, PreviewPayload } from './app-contract'
+import type { FileTreeOptions } from './project-contract'
 
 /**
  * Calls into the editor. Every entry point lives in
@@ -29,3 +30,12 @@ export const previewPayload = async (
 
 export const previewDocument = async (nvim: NeovimClient, bufnr: BufferId, filename: string) =>
   await invoke(nvim, 'document', [Number(bufnr), filename]) as { path: string | null, payload: PreviewPayload }
+
+export const projectContext = async (nvim: NeovimClient, bufnr: BufferId) =>
+  await invoke(nvim, 'project', [Number(bufnr)]) as { root: string, options?: FileTreeOptions } | null
+
+export const projectDocument = async (
+  nvim: NeovimClient, bufnr: BufferId, filename: string, maxBytes: number, text: boolean
+) => await invoke(nvim, 'document', [Number(bufnr), filename, { maxBytes, text }]) as
+  | { source: true, path: null }
+  | { source?: false, path: string, payload: PreviewPayload, tooLarge?: number }

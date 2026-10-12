@@ -1,4 +1,5 @@
 import { NeovimClient } from '@chemzqm/neovim'
+import type { FilePresentation } from './project-contract'
 
 export type BufferId = number | string
 export type ChangedTick = number | undefined
@@ -31,6 +32,7 @@ export interface PreviewPayload {
   name?: string
   content?: string[]
   changedtick?: ChangedTick
+  file?: FilePresentation
 }
 
 export interface PreviewApp {

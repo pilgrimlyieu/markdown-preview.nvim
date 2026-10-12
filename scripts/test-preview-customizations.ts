@@ -494,6 +494,15 @@ config.setup({ browser = { 'sh', '-c', 'printf %s "$0" > ' .. out } })
 browser.open('http://list')
 vim.wait(5000, function() return vim.fn.filereadable(out) == 1 end, 20)
 assert(vim.fn.readfile(out)[1] == 'http://list', 'a command list should receive the url')
+
+-- vim.ui.open reports a missing handler with nil, error rather than throwing.
+local notifications = {}
+vim.notify = function(message) notifications[#notifications + 1] = message end
+vim.ui.open = function() return nil, 'no browser handler' end
+config.setup({ echo_url = true })
+browser.open('http://missing')
+assert(#notifications == 1 and notifications[1]:find('failed to open http://missing', 1, true)
+  and notifications[1]:find('no browser handler', 1, true), 'default opener failures must be reported')
 `
 
 const serverScript = `

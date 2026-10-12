@@ -135,7 +135,16 @@ function getLineOffsetTop (line: number, len: number) {
 
 function scrollRelativeLine (line: number, ratio: number, len: number) {
   const offsetTop = getLineOffsetTop(line, len)
-  scroll(offsetTop - document.documentElement.clientHeight * ratio)
+  const height = document.documentElement.clientHeight
+  const controls = document.getElementById?.('preview-tools')?.getBoundingClientRect()
+  let position = height * ratio
+  if (controls && controls.height > 0 && controls.top >= 0 && controls.bottom >= height) {
+    const anchor = findSourceLineBounds(line).previous?.element || document.documentElement
+    const lineHeight = parseFloat(getComputedStyle(anchor).lineHeight) || 24
+    // The last editor row needs a full readable line above the bottom controls.
+    position = Math.max(0, Math.min(controls.top * ratio, controls.top - lineHeight))
+  }
+  scroll(offsetTop - position)
 }
 
 function scrollLine (line: number, ratio: number, len: number) {

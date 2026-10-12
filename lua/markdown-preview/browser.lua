@@ -19,17 +19,17 @@ function M.open(url)
   local opts = config.get()
   local browser = opts.browser
 
-  local ok, err
+  local ok, result, open_error
   if type(browser) == "function" then
-    ok, err = pcall(browser, url)
+    ok, result = pcall(browser, url)
   elseif browser ~= nil and browser ~= "" then
-    ok, err = pcall(vim.system, command(browser, url), { detach = true })
+    ok, result = pcall(vim.system, command(browser, url), { detach = true })
   else
-    ok, err = pcall(vim.ui.open, url)
+    ok, result, open_error = pcall(vim.ui.open, url)
   end
 
-  if not ok then
-    util.error({ "failed to open " .. url, tostring(err) })
+  if not ok or open_error then
+    util.error({ "failed to open " .. url, tostring(open_error or result) })
     return
   end
 

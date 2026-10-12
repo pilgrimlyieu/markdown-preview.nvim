@@ -43,6 +43,12 @@
 ---@field enabled? boolean Reuse a single preview tab for every buffer.
 ---@field auto_refresh? boolean Point that tab at the buffer you switch to.
 
+---@class mkdp.FileTreeConfig
+---@field exclude? string[] Directory/file names hidden from the tree, matched literally.
+---@field max_entries? integer Maximum entries examined in one directory.
+---@field max_text_bytes? integer Limit for reading another text file or loaded buffer.
+---@field max_image_bytes? integer Limit for displaying a selected image.
+
 ---@class mkdp.Config
 ---@field auto_start? boolean Open the preview when entering a matching buffer.
 ---@field auto_close? boolean Close the preview page when the buffer is hidden.
@@ -57,6 +63,7 @@
 ---@field scroll? mkdp.ScrollConfig
 ---@field css? mkdp.CssConfig
 ---@field combine? mkdp.CombineConfig
+---@field file_tree? mkdp.FileTreeConfig
 ---@field render? mkdp.RenderOptions
 
 ---@type mkdp.Config
@@ -103,6 +110,13 @@ local defaults = {
   combine = {
     enabled = false,
     auto_refresh = true,
+  },
+
+  file_tree = {
+    exclude = { ".git", ".jj", "node_modules", ".venv", "target", "dist", "build" },
+    max_entries = 20000,
+    max_text_bytes = 2 * 1024 * 1024,
+    max_image_bytes = 20 * 1024 * 1024,
   },
 
   render = {

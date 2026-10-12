@@ -12,7 +12,7 @@ interface LocalFileOptions {
   imagesPath?: string
 }
 
-function nativeEditorPath(filename: string) {
+export function nativeEditorPath(filename: string) {
   return process.env.MINGW_HOME && !filename.includes(':')
     ? execFileSync('cygpath.exe', ['-w', '-a', filename], { encoding: 'utf8' }).replace(/\r?\n$/, '')
     : filename
